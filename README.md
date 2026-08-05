@@ -1,6 +1,6 @@
 # Hello_chess
 
-一个基于 EasyX 图形库的 Windows 六子棋（连六）游戏，使用 C++11 编写，通过 CMake 构建。
+一个基于 EasyX 图形库的 Windows 六子棋（连六）游戏，使用 C++11 编写，通过 CMake 构建。（目前仅仅用了C特性）
 
 > 本项目仅面向 Windows 平台，依赖 EasyX 图形库，不跨平台。
 
