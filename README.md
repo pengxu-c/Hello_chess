@@ -87,7 +87,7 @@ cmake --build build --config Release
 
 ## 致谢
 
-本项目使用 [EasyX](https://easyx.cn/) 图形库（免费版），版权归原作者所有，仅供学习使用。
+本项目使用 [EasyX](https://easyx.cn/) 图形库（免费版），EasyX版权归原作者所有，仅供学习使用。
 特别感谢 **EasyX** 图形库，本项目的全部图形绘制与交互实现均建立在它之上。
 
 - EasyX 官网：<https://easyx.cn>
