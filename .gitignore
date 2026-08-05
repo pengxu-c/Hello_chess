@@ -1,0 +1,41 @@
+# ========== 隐私 / 本地路径（最重要）==========
+cmake-local.cmake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+*.user
+*.suo
+.env
+
+# ========== CMake 构建目录 ==========
+build/
+out/
+cmake-build-*/
+
+# ========== 编译产物 ==========
+*.exe
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.a
+*.so
+
+# ========== IDE 本地配置 ==========
+.vscode/
+.vs/
+.idea/
+
+# ========== 系统垃圾文件 ==========
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ========== 日志 / 临时 ==========
+*.log
+*.tmp
+*.bak
