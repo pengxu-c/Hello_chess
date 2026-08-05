@@ -142,7 +142,7 @@ void update(Game* pthis)
                     }
                     else if (pthis->blackMoveCount < 114)
                     {
-                        printf("恭喜你获得秘钥——\n密钥：111111。\n");
+                        printf("恭喜你获得秘钥——\n密钥：113113。\n");
                     }
                     printf("----------------------------------\n"); // 分割线，让输出更清晰
                 

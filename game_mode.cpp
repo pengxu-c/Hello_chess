@@ -23,10 +23,10 @@ GameMode selectMode()
     printf("    游戏愉快！\n\n\n\n");
     // 向控制台打印游戏模式选择菜单
     printf("请选择游戏模式：\n");
-    printf("1. 双人对战 ——(PVP)\n");
-    printf("2. 人机对战 —— 易如反掌（超简单）\n");
-    printf("3. 人机对战 —— 长线思考（更好玩）\n");
-    printf("4. 人机对战 —— 深度推理（最智能）\n");
+    printf("1.  (PVP)\n");
+    printf("2.  easy-judge\n");
+    printf("3.  pure-greed 1.0 \n");
+    printf("4.  pure-greed 1.1\n");
     printf("请输入选项 (1-4): \n如果是无效选项，默认进入双人对战模式。\n");
 
     // 循环读取用户输入，直到获得一个有效的整数
@@ -51,9 +51,7 @@ GameMode selectMode()
     case 4:
         return PVC_HARD;    // 人机困难模式（AI 具备攻防评分策略）
     case 111111:
-        printf("敬请期待"); 
-        Sleep(10000);
-        break;
+        printf("敬请期待"); break;
     default:
         // 如果输入超出 1~4 范围，默认进入双人对战模式
         printf("无效选项，默认进入双人对战模式。\n");
