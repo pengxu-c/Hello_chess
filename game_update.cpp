@@ -91,7 +91,7 @@ void update(Game* pthis)
                     // 2. 打印步数和分数到控制台
                     printf("黑棋已下 %d 步, 当前得分: %d\n", pthis->blackMoveCount, player_score);
 
-                    // 3. 根据步数打印不同的鼓励话语
+                    // 3. 根据步数打印不同的话语
                     if (pthis->blackMoveCount < 10)
                     {
                         printf("初窥门径，棋路清晰。\n");

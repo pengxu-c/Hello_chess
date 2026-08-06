@@ -8,11 +8,11 @@
 #include <graphics.h>
 
 // 棋盘常量定义
-#define ROWS 15
-#define COLS 15
-#define GRID_SIZE 38 // 每个格子的大小（像素）
-#define XOFFSET 213  // 棋盘左上角在窗口中的 X、Y 坐标偏移量
-#define YOFFSET 34  
+inline int ROWS = 15;
+inline int COLS = 15;
+inline int GRID_SIZE = 38; // 每个格子的大小（像素）
+inline int XOFFSET = 213; // 棋盘左上角在窗口中的 X、Y 坐标偏移量
+inline int YOFFSET = 34;  
 
 // 棋子类型，采用枚举类型更加直观
 enum ChessType
@@ -34,7 +34,7 @@ enum GameMode
 // 游戏状态结构
 struct Game 
 {
-    int map[ROWS][COLS];            // 二维数组，存储棋盘上每个位置的棋子类型
+    int** map;            // 二维数组，存储棋盘上每个位置的棋子类型
     bool isRunning;                 // 布尔值，标记游戏是否正在运行
     ExMessage msg;                  // 存储 EasyX 消息（鼠标点击、移动）
     int row, col;                   // 当前鼠标悬停位置对应的棋盘逻辑坐标（行、列）

@@ -54,7 +54,7 @@ void aiMoveEasyEasy(Game* pthis)
     }
 
     // 收集所有空位坐标
-    int empty[ROWS * COLS][2];
+    int (*empty)[2] = new int[ROWS * COLS][2];
     // 空位计数器
     int count = 0;
     // 遍历棋盘
@@ -74,7 +74,7 @@ void aiMoveEasyEasy(Game* pthis)
         }
     }
     // 如果没有空位，直接返回（棋盘满）
-    if (count == 0) return;
+    if (count == 0) { delete[] empty; return; }
     // 随机选择一个空位索引
     int idx = rand() % count;
     // 获取选中的行和列
@@ -84,6 +84,7 @@ void aiMoveEasyEasy(Game* pthis)
     // 记录落子位置
     pthis->row = r;
     pthis->col = c;
+    delete[] empty;
 }
 
 // 实现 aiMoveEasy 函数：基于防守评分的简单 AI

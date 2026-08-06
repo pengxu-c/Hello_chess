@@ -20,6 +20,7 @@ int main()
 
         // 定义游戏对象 game，类型为 struct Game
         Game game;
+        game.map = nullptr;
 
         // 调用 init 函数，初始化图形窗口（960x600）和游戏状态
         init(&game, 960, 600, mode);
@@ -187,6 +188,10 @@ int main()
         // 游戏结束后询问是否再玩一次
         int result = MessageBox(GetHWnd(), L"是否再来一局？", L"游戏结束", MB_YESNO | MB_ICONQUESTION);
         playAgain = (result == IDYES);
+
+        for (int i = 0; i < ROWS; i++) delete[] game.map[i];
+        delete[] game.map;
+        game.map = nullptr;
     }
 
     // 关闭图形窗口，释放资源

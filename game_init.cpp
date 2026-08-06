@@ -32,6 +32,13 @@ void init(Game* pthis, int w, int h, GameMode mode)
     pthis->humanMoveCount = 0;
     // 初始化黑棋步数为 0
     pthis->blackMoveCount = 0;
-    // 使用 memset 将棋盘清零（全部设为 None）
-    memset(pthis->map, 0, sizeof(pthis->map));
+    if (pthis->map) {
+        for (int i = 0; i < ROWS; i++) delete[] pthis->map[i];
+        delete[] pthis->map;
+    }
+    pthis->map = new int*[ROWS];
+    for (int i = 0; i < ROWS; i++) {
+        pthis->map[i] = new int[COLS];
+        for (int j = 0; j < COLS; j++) pthis->map[i][j] = 0;
+    }
 }
