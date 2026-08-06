@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.10)
 project(Hello_chess)
 
 set(CMAKE_CXX_STANDARD 17)
+if(MSVC)
+    add_compile_options(/utf-8)
+else()
+    add_compile_options(-finput-charset=UTF-8 -fexec-charset=GBK)
+endif()
 
 include(cmake-local.cmake OPTIONAL)
 
@@ -20,12 +25,10 @@ message(STATUS "已找到EasyX头文件: ${EASYX_INCLUDE}")
 # ========== 源文件 ==========
 set(SOURCE_FILES
     main.cpp
-    game_init.cpp
-    game_render.cpp
-    game_update.cpp
-    game_judge.cpp
-    game_ai.cpp
-    game_mode.cpp
+    core.cpp
+    ui.cpp
+    player.cpp
+    controller.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
