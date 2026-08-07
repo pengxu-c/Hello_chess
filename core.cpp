@@ -7,22 +7,38 @@
 
 // ---------- Board ----------
 Board::Board() {
-    map_ = new int*[ROWS];
-    for (int i = 0; i < ROWS; i++) {
-        map_[i] = new int[COLS];
-        for (int j = 0; j < COLS; j++) map_[i][j] = 0;
+    size_ = ROWS;
+    map_ = new int*[size_];
+    for (int i = 0; i < size_; i++) {
+        map_[i] = new int[size_];
+        for (int j = 0; j < size_; j++) map_[i][j] = 0;
     }
 }
 
 Board::~Board() {
     if (!map_) return;
-    for (int i = 0; i < ROWS; i++) delete[] map_[i];
+    for (int i = 0; i < size_; i++) delete[] map_[i];
     delete[] map_;
 }
 
+// 按当前全局 ROWS/COLS 重建棋盘（配置更改尺寸后调用）
+void Board::resize() {
+    if (map_) {
+        for (int i = 0; i < size_; i++) delete[] map_[i];
+        delete[] map_;
+        map_ = nullptr;
+    }
+    size_ = ROWS;
+    map_ = new int*[size_];
+    for (int i = 0; i < size_; i++) {
+        map_[i] = new int[size_];
+        for (int j = 0; j < size_; j++) map_[i][j] = 0;
+    }
+}
+
 void Board::clear() {
-    for (int i = 0; i < ROWS; i++)
-        for (int j = 0; j < COLS; j++) map_[i][j] = 0;
+    for (int i = 0; i < size_; i++)
+        for (int j = 0; j < size_; j++) map_[i][j] = 0;
 }
 
 bool Board::place(int r, int c, ChessType color) {
@@ -43,14 +59,14 @@ ChessType Board::at(int r, int c) const {
 }
 
 bool Board::isFull() const {
-    for (int i = 0; i < ROWS; i++)
-        for (int j = 0; j < COLS; j++)
+    for (int i = 0; i < size_; i++)
+        for (int j = 0; j < size_; j++)
             if (map_[i][j] == static_cast<int>(ChessType::None)) return false;
     return true;
 }
 
 bool Board::inBounds(int r, int c) const {
-    return r >= 0 && r < ROWS && c >= 0 && c < COLS;
+    return r >= 0 && r < size_ && c >= 0 && c < size_;
 }
 
 // ---------- Judge ----------
@@ -79,10 +95,6 @@ bool Judge::checkWin(const Board& b, Pos last, ChessType color, int length) cons
         }
     }
     return false;
-}
-
-bool Judge::checkFive(const Board& b, Pos last, ChessType color) const {
-    return checkWin(b, last, color, 5);
 }
 
 // ---------- Stats ----------

@@ -31,13 +31,42 @@ Player* GameController::createPlayer(int choice) {
     }
 }
 
+// 终端配置棋盘尺寸与连珠数（输入 c 触发，否则使用默认 15×15 五子棋）
+void GameController::configureRules() {
+    printf("Customize rules? Type 'c' to customize, or press Enter for default (15x15, 5-in-a-row): ");
+    char buf[64];
+    if (!fgets(buf, sizeof(buf), stdin)) return;
+    if (buf[0] != 'c' && buf[0] != 'C') return;
+
+    int n = 15, k = 5;
+    printf("Board size N (5..30, default 15): ");
+    if (fgets(buf, sizeof(buf), stdin) && sscanf_s(buf, "%d", &n) != 1) n = 15;
+    if (n < 5 || n > 30) n = 15;
+    printf("Win length k (3..%d, default 5): ", n);
+    if (fgets(buf, sizeof(buf), stdin) && sscanf_s(buf, "%d", &k) != 1) k = 5;
+    if (k < 3 || k > n) k = 5;
+
+    boardSize_ = n;
+    winLength_ = k;
+    ROWS = COLS = boardSize_;
+    WIN_LEN = winLength_;
+    // 按 boardSize_ 调整网格像素与偏移，使棋盘居中 960×600 窗口
+    GRID_SIZE = 560 / (boardSize_ - 1);
+    if (GRID_SIZE < 12) GRID_SIZE = 12;
+    XOFFSET = (960 - (boardSize_ - 1) * GRID_SIZE) / 2;
+    YOFFSET = (600 - (boardSize_ - 1) * GRID_SIZE) / 2;
+    board_.resize();
+    printf("Rules set: %dx%d board, %d-in-a-row to win.\n\n", boardSize_, boardSize_, winLength_);
+}
+
 // 终端选择双方棋手类型
 void GameController::selectPlayers() {
-    printf("[Six-in-a-row Rules]\n");
-    printf("1. Board: 15x15 grid.\n");
+    configureRules();
+
+    printf("[Game Rules]\n");
+    printf("1. Board: %dx%d grid.\n", boardSize_, boardSize_);
     printf("2. Players: Black moves first, turns alternate.\n");
-    printf("3. Win: first to form 6 in a row (horizontal/vertical/diagonal) wins.\n");
-    printf("4. Note: five in a row does NOT win; exactly six or more is required.\n");
+    printf("3. Win: first to form %d in a row (horizontal/vertical/diagonal) wins.\n", winLength_);
     printf("    Enjoy!\n\n");
 
     printf("Available player types:\n");
@@ -92,7 +121,7 @@ void GameController::playOneGame() {
                 if (currentColor == ChessType::Black) stats_.printProgress();
 
                 // 判定胜负
-                if (judge_.checkWin(board_, pos, currentColor, 6)) {
+                if (judge_.checkWin(board_, pos, currentColor, winLength_)) {
                     const wchar_t* who = (current == player1_) ? L"玩家1 获胜！" : L"玩家2 获胜！";
                     ui_->messageBox(who);
                     running = false;

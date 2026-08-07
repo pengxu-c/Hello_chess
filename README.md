@@ -1,6 +1,6 @@
 # Hello_chess
 
-一个基于 EasyX 图形库的 Windows 多子棋游戏（目前仅仅是六子棋），使用 **C++17** 编写，面向对象设计，通过 CMake 构建。
+一个基于 EasyX 图形库的 Windows 多子棋游戏，使用 **C++17** 编写，面向对象设计，通过 CMake 构建。默认为 15×15 五子棋，支持自定义 N×N 棋盘与 n 连获胜。
 
 > 本项目仅面向 Windows 平台，依赖 EasyX 图形库，不跨平台。
 
@@ -8,11 +8,11 @@
 
 ## 游戏规则
 
-- 棋盘规模：15 × 15。
+- 默认棋盘规模：15 × 15，连珠获胜数：5（五子棋）。
 - 对局双方：黑棋先手，白棋后手，轮流落子。
-- 胜利条件：率先在横、竖、斜任一方向上形成 **连续 6 颗同色棋子** 者获胜。
-- 特别说明：**五连不胜**，必须形成六连（或更长连珠）才算获胜。
-- 平局：棋盘填满仍无人达成六连，判为平局。
+- 胜利条件：率先在横、竖、斜任一方向上形成 **连续 n 颗同色棋子** 者获胜。
+- 平局：棋盘填满仍无人达成 n 连，判为平局。
+- **自定义规则**：启动时控制台提示 `Customize rules?`，输入 `c` 可设置棋盘尺寸 N（5..30）与连珠数 n（3..N）；直接回车则使用默认 15×15 五子棋。
 
 ## 棋手类型
 
@@ -23,9 +23,10 @@
 | 1 | 人类玩家 | 鼠标点击落子 |
 | 2 | EasyJudge | 超简单：随机落子 + 防输机制 |
 | 3 | PureGreed 1.0 | 纯防守评分 |
-| 4 | PureGreed 1.1 | 攻防评分（最强） |
+| 4 | PureGreed 1.1 | 攻防评分 |
+| 5 | Minimax++ | alpha-beta 剪枝搜索（最强） |
 
-任意双方可自由组合，**支持 AI 对 AI**（如玩家1 选 PureGreed 1.1，玩家2 选 EasyJudge，即可观战 AI 互弈）。输入非数字或越界时默认为人类玩家。
+任意双方可自由组合，**支持 AI 对 AI**（如玩家1 选 Minimax++，玩家2 选 EasyJudge，即可观战 AI 互弈）。输入非数字或越界时默认为人类玩家。
 
 > AI 难度名称仅作相对区分，不代表实际棋力水平，请以体验为准。
 
@@ -36,7 +37,7 @@
 | 文件 | 类 | 职责 |
 |:-----|:---|:-----|
 | `core.h/.cpp` | `Board` | 棋盘数据，落子/读取/判满 |
-| | `Judge` | 胜负判定（六连/五连，长度参数化） |
+| | `Judge` | 胜负判定（连珠长度参数化） |
 | | `Stats` | 数据统计（双方步数） |
 | `ui.h/.cpp` | `UI` | **封装全部 EasyX 调用**：窗口、渲染、鼠标、消息框 |
 | `player.h/.cpp` | `Player` | 棋手抽象基类 |
@@ -44,7 +45,8 @@
 | | `EasyJudgeAI` | 超简单 AI，派生自 Player |
 | | `PureGreed10` | 防守 AI，派生自 Player |
 | | `PureGreed11` | 攻防 AI，派生自 Player |
-| `controller.h/.cpp` | `GameController` | 主循环、终端选玩家、回合调度 |
+| | `MinimaxPP` | alpha-beta 搜索 AI，派生自 Player |
+| `controller.h/.cpp` | `GameController` | 主循环、规则配置、终端选玩家、回合调度 |
 | `main.cpp` | — | 仅构造控制器并 `run()` |
 
 ### 类关系
@@ -62,7 +64,7 @@ chess/
 ├── core.h / core.cpp        Board, Judge, Stats, Pos, ChessType
 ├── ui.h / ui.cpp            UI（EasyX 封装）
 ├── player.h / player.cpp    Player 基类 + 4 个派生棋手
-├── controller.h / controller.cpp  GameController （中文输出乱码问题😭）
+├── controller.h / controller.cpp  GameController（规则配置 + 回合调度）
 ├── main.cpp                 程序入口
 ├── CMakeLists.txt           CMake 构建脚本
 └── cmake-local.cmake        本地 EasyX 路径（已被 .gitignore 忽略）
@@ -107,7 +109,7 @@ cmake --build build --config Release
 
 - 仅支持 Windows，目前未做跨平台适配。
 - 目前不支持悔棋、联机对战、棋谱保存等功能。
-- AI 思路为启发式评分，无搜索算法，复杂局面下可能并非最优解，未来会扩展API服务。
+- EasyJudge / PureGreed 系列为启发式评分，Minimax++ 采用 alpha-beta 剪枝搜索（深度 3、半径 2，可在 `player.h` 顶部 `constexpr` 调整），复杂局面下仍可能非最优。
 - 棋盘背景图路径写死为相对路径，需从工作目录正确启动方可加载！
 
 ## 致谢

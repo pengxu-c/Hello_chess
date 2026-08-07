@@ -1,10 +1,38 @@
 // ============================================================
 // player.cpp - 棋手类实现
-// HumanPlayer / EasyJudgeAI / PureGreed10 / PureGreed11
+// HumanPlayer / EasyJudgeAI / PureGreed10 / PureGreed11 / MinimaxPP
 // ============================================================
 #include "player.h"
 #include "ui.h"
 #include <cstdlib>
+
+// 防守威胁评分（按 WIN_LEN 自动分级，PureGreed10 用）
+static int threatScore(int count) {
+    if (count >= WIN_LEN) return 1000000;
+    if (count <= 0) return 0;
+    int diff = WIN_LEN - count;
+    switch (diff) {
+        case 1: return 40000;
+        case 2: return 20000;
+        case 3: return 2000;
+        case 4: return 200;
+        default: return 1;
+    }
+}
+
+// Minimax 窗口评分（按 WIN_LEN 自动分级）
+static int windowScore(int count) {
+    if (count >= WIN_LEN) return 1000000;
+    if (count <= 0) return 0;
+    int diff = WIN_LEN - count;
+    switch (diff) {
+        case 1: return 50000;
+        case 2: return 5000;
+        case 3: return 500;
+        case 4: return 50;
+        default: return 1;
+    }
+}
 
 // ---------- HumanPlayer ----------
 HumanPlayer::HumanPlayer(UI& ui) : ui_(ui) {}
@@ -23,16 +51,16 @@ const char* HumanPlayer::name() const { return "Human"; }
 // ---------- EasyJudgeAI ----------
 EasyJudgeAI::EasyJudgeAI(Judge& judge, Stats& stats) : judge_(judge), stats_(stats) {}
 
-// 检测在 (r,c) 落对方子后是否形成五连（即此处需防守）
+// 检测在 (r,c) 落对方子后是否形成 (WIN_LEN-1) 连（即此处需防守）
 bool EasyJudgeAI::canBlockFive(Board& board, int r, int c, ChessType oppColor) {
     ChessType old = board.at(r, c);
     board.set(r, c, oppColor);
-    bool win = judge_.checkFive(board, { r, c }, oppColor);
+    bool win = judge_.checkWin(board, { r, c }, oppColor, WIN_LEN - 1);
     board.set(r, c, old);
     return win;
 }
 
-// 超简单 AI：对方步数<30 时优先防输，否则随机落子
+// 超简单 AI：对方步数<60 时优先防输，否则随机落子
 Pos EasyJudgeAI::place(Board& board, ChessType color) {
     ChessType oppColor = opponent(color);
     if (stats_.count(oppColor) < 60) {
@@ -82,26 +110,20 @@ Pos PureGreed10::place(Board& board, ChessType color) {
             for (int d = 0; d < 4; d++) {
                 int oppCount = 0;
                 // 正方向扫描对方连续子数
-                for (int step = 1; step <= 5; step++) {
+                for (int step = 1; step <= WIN_LEN - 1; step++) {
                     int ni = i + step * dr[d], nj = j + step * dc[d];
                     if (!board.inBounds(ni, nj)) break;
                     if (board.at(ni, nj) == oppColor) oppCount++;
                     else break;
                 }
                 // 反方向扫描
-                for (int step = 1; step <= 5; step++) {
+                for (int step = 1; step <= WIN_LEN - 1; step++) {
                     int ni = i - step * dr[d], nj = j - step * dc[d];
                     if (!board.inBounds(ni, nj)) break;
                     if (board.at(ni, nj) == oppColor) oppCount++;
                     else break;
                 }
-                // 防守评分表
-                if (oppCount >= 6) blockScore += 1000000;
-                else if (oppCount >= 5) blockScore += 40000;
-                else if (oppCount >= 4) blockScore += 20000;
-                else if (oppCount >= 3) blockScore += 2000;
-                else if (oppCount >= 2) blockScore += 200;
-                else if (oppCount >= 1) blockScore += 1;
+                blockScore += threatScore(oppCount);
             }
             if (blockScore > bestScore) {
                 bestScore = blockScore;
@@ -132,14 +154,14 @@ Pos PureGreed11::place(Board& board, ChessType color) {
             for (int d = 0; d < 4; d++) {
                 // 己方连续子数（正反方向）
                 int selfCount = 0;
-                for (int step = 1; step <= 5; step++) {
+                for (int step = 1; step <= WIN_LEN - 1; step++) {
                     int ni = i + step * dr[d], nj = j + step * dc[d];
                     if (!board.inBounds(ni, nj)) break;
                     if (board.at(ni, nj) == color) selfCount++;
                     else if (board.at(ni, nj) == oppColor) { diew[d]++; break; }
                     else break;
                 }
-                for (int step = 1; step <= 5; step++) {
+                for (int step = 1; step <= WIN_LEN - 1; step++) {
                     int ni = i - step * dr[d], nj = j - step * dc[d];
                     if (!board.inBounds(ni, nj)) break;
                     if (board.at(ni, nj) == color) selfCount++;
@@ -148,33 +170,35 @@ Pos PureGreed11::place(Board& board, ChessType color) {
                 }
                 // 对方连续子数（正反方向）
                 int oppCount = 0;
-                for (int step = 1; step <= 5; step++) {
+                for (int step = 1; step <= WIN_LEN - 1; step++) {
                     int ni = i + step * dr[d], nj = j + step * dc[d];
                     if (!board.inBounds(ni, nj)) break;
                     if (board.at(ni, nj) == oppColor) oppCount++;
                     else if (board.at(ni, nj) == color) { dieb[d]++; break; }
                     else break;
                 }
-                for (int step = 1; step <= 5; step++) {
+                for (int step = 1; step <= WIN_LEN - 1; step++) {
                     int ni = i - step * dr[d], nj = j - step * dc[d];
                     if (!board.inBounds(ni, nj)) break;
                     if (board.at(ni, nj) == oppColor) oppCount++;
                     else if (board.at(ni, nj) == color) { dieb[d]++; break; }
                     else break;
                 }
-                // 进攻评分（区分活/死棋）
-                if (selfCount >= 6) selfScore += 1000000;
-                else if (selfCount == 5) { if (diew[d] >= 2) selfScore += 100; else selfScore += 40000; }
-                else if (selfCount == 4) { if (diew[d] >= 2) selfScore += 30; else selfScore += 10000; }
-                else if (selfCount == 3) { if (diew[d] >= 2) selfScore += 20; else selfScore += 1000; }
-                else if (selfCount >= 2) { if (diew[d] >= 2) selfScore += 5; else selfScore += 100; }
+                // 进攻评分（按 WIN_LEN 分级，区分活/死棋）
+                int selfDiff = WIN_LEN - selfCount;
+                if (selfCount >= WIN_LEN) selfScore += 1000000;
+                else if (selfDiff == 1) { if (diew[d] >= 2) selfScore += 100; else selfScore += 40000; }
+                else if (selfDiff == 2) { if (diew[d] >= 2) selfScore += 30; else selfScore += 10000; }
+                else if (selfDiff == 3) { if (diew[d] >= 2) selfScore += 20; else selfScore += 1000; }
+                else if (selfDiff >= 4) { if (diew[d] >= 2) selfScore += 5; else selfScore += 100; }
                 // 防守评分
-                if (oppCount >= 6) blockScore += 50000;
-                else if (oppCount >= 5) { if (dieb[d] >= 2) blockScore += 100; else blockScore += 30000; }
-                else if (oppCount >= 4) { if (dieb[d] >= 2) blockScore += 80; else blockScore += 20000; }
-                else if (oppCount >= 3) { if (dieb[d] >= 2) blockScore += 10; else blockScore += 2000; }
-                else if (oppCount >= 2) { if (dieb[d] >= 2) blockScore += 1; else blockScore += 200; }
-                else if (oppCount >= 1) blockScore += 1;
+                int oppDiff = WIN_LEN - oppCount;
+                if (oppCount >= WIN_LEN) blockScore += 50000;
+                else if (oppDiff == 1) { if (dieb[d] >= 2) blockScore += 100; else blockScore += 30000; }
+                else if (oppDiff == 2) { if (dieb[d] >= 2) blockScore += 80; else blockScore += 20000; }
+                else if (oppDiff == 3) { if (dieb[d] >= 2) blockScore += 10; else blockScore += 2000; }
+                else if (oppDiff == 4) { if (dieb[d] >= 2) blockScore += 1; else blockScore += 200; }
+                else blockScore += 1;
             }
             int total = selfScore + blockScore;
             if (total > bestScore) {
@@ -198,9 +222,8 @@ const char* PureGreed11::name() const { return "PureGreed 1.1"; }
 // ---------- Minimax++：alpha-beta 剪枝搜索 ----------
 MinimaxPP::MinimaxPP(Judge& judge) : judge_(judge) {}
 
-// 局面评估：遍历所有长度6窗口，按己方/对方纯窗口子数评分
+// 局面评估：遍历所有长度 WIN_LEN 窗口，按己方/对方纯窗口子数评分
 int MinimaxPP::evaluate(const Board& board, ChessType aiColor) const {
-    static const int lineScore[7] = { 0, 1, 50, 500, 5000, 50000, 1000000 };
     int dr[] = { 0, 1, 1, 1 };
     int dc[] = { 1, 0, 1, -1 };
     ChessType oppColor = opponent(aiColor);
@@ -208,15 +231,15 @@ int MinimaxPP::evaluate(const Board& board, ChessType aiColor) const {
     for (int d = 0; d < 4; d++) {
         for (int r = 0; r < ROWS; r++) {
             for (int c = 0; c < COLS; c++) {
-                if (!board.inBounds(r + 5 * dr[d], c + 5 * dc[d])) continue;
+                if (!board.inBounds(r + (WIN_LEN - 1) * dr[d], c + (WIN_LEN - 1) * dc[d])) continue;
                 int self = 0, opp = 0;
-                for (int i = 0; i < 6; i++) {
+                for (int i = 0; i < WIN_LEN; i++) {
                     ChessType t = board.at(r + i * dr[d], c + i * dc[d]);
                     if (t == aiColor) self++;
                     else if (t == oppColor) opp++;
                 }
-                if (self > 0 && opp == 0) score += lineScore[self];
-                else if (opp > 0 && self == 0) score -= lineScore[opp];
+                if (self > 0 && opp == 0) score += windowScore(self);
+                else if (opp > 0 && self == 0) score -= windowScore(opp);
             }
         }
     }
@@ -260,7 +283,7 @@ int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
         int best = -kInf;
         for (const auto& m : moves) {
             board.set(m.r, m.c, curColor);
-            if (judge_.checkWin(board, m, curColor, 6)) {
+            if (judge_.checkWin(board, m, curColor, WIN_LEN)) {
                 board.set(m.r, m.c, ChessType::None);
                 return kInf - (kDepth - depth);   // 越浅赢越好
             }
@@ -275,7 +298,7 @@ int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
         int best = kInf;
         for (const auto& m : moves) {
             board.set(m.r, m.c, curColor);
-            if (judge_.checkWin(board, m, curColor, 6)) {
+            if (judge_.checkWin(board, m, curColor, WIN_LEN)) {
                 board.set(m.r, m.c, ChessType::None);
                 return -kInf + (kDepth - depth);
             }
@@ -298,7 +321,7 @@ Pos MinimaxPP::place(Board& board, ChessType color) {
     int alpha = -kInf, beta = kInf;
     for (const auto& m : moves) {
         board.set(m.r, m.c, color);
-        if (judge_.checkWin(board, m, color, 6)) {
+        if (judge_.checkWin(board, m, color, WIN_LEN)) {
             board.set(m.r, m.c, ChessType::None);
             return m;   // 直接获胜
         }

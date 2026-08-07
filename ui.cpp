@@ -81,7 +81,7 @@ void UI::drawPieces(const Board& board) {
                 setfillcolor(BLACK);
                 setlinecolor(WHITE);
             }
-            solidcircle(x, y, 15);
+            solidcircle(x, y, GRID_SIZE / 2 - 3);
         }
     }
 }
@@ -92,7 +92,7 @@ void UI::drawHover(Pos hover) {
         setlinecolor(BLUE);
         int x = hover.c * GRID_SIZE + XOFFSET;
         int y = hover.r * GRID_SIZE + YOFFSET;
-        circle(x, y, 17);
+        circle(x, y, GRID_SIZE / 2 - 1);
     }
 }
 
