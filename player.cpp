@@ -5,6 +5,65 @@
 #include "player.h"
 #include "ui.h"
 #include <cstdlib>
+#include <cmath>
+#include <algorithm>
+
+// ==================== 通用评分工具 ====================
+// 三个 AI 的内部原始分各不相同，统一映射到 0-750 整数，
+// 记录 top8，在 top1 下方合理区间内随机选择，增加对局多样性。
+// 设计约束：必胜 → 750，此时区间仅含 750 的位置（随机选也必胜）。
+
+// 评分位置结构（映射后的 0-750 分 + 坐标）
+struct ScoredMove {
+    int score;  // 0-750
+    int r, c;
+};
+
+// 非负原始分 → 0-750（PureGreed10/11 用）。
+// raw >= 1000000(必胜级) → 750；其余对数压缩，使分值分布均匀。
+static int mapTo750(int raw) {
+    if (raw >= 1000000) return 750;
+    if (raw <= 0) return 0;
+    return (int)(749.0 * std::log(1.0 + raw) / std::log(1.0 + 1000000.0));
+}
+
+// minimax 值(±kInf) → 0-750（MinimaxPP 用）。
+// +kInf → 750(必胜)，-kInf → 0(必败)，0 → 375(中性)，正负两侧对数压缩。
+static int mapMinimaxTo750(int val) {
+    const int INF = 100000000;
+    if (val >= INF - 100) return 750;
+    if (val <= -INF + 100) return 0;
+    if (val >= 0) {
+        return 375 + (int)(375.0 * std::log(1.0 + val) / std::log(1.0 + 1000000.0));
+    } else {
+        return 375 - (int)(375.0 * std::log(1.0 - val) / std::log(1.0 + 1000000.0));
+    }
+}
+
+// 在 scored 列表中：降序排序取 top8，在 top1 下方 delta 区间内随机选。
+// 区间半径 delta：
+//   top1 == 750(必胜) → delta=0，只选 750 的位置（多个则随机）；
+//   否则 delta = max(3, (750-top1)/10)，高分窄区间、低分宽区间。
+static Pos pickBestMove(std::vector<ScoredMove>& scored) {
+    if (scored.empty()) return { -1, -1 };
+    std::sort(scored.begin(), scored.end(),
+              [](const ScoredMove& a, const ScoredMove& b) { return a.score > b.score; });
+    int n = (int)scored.size();
+    if (n > 8) n = 8;                          // 只看 top 8
+    int top1 = scored[0].score;
+    int rawDelta = (750 - top1) / 10;
+    int delta = (top1 >= 750) ? 0 : (rawDelta < 3 ? 3 : rawDelta);   // 必胜→0；高分窄、低分宽
+    int lower = top1 - delta;
+    // 在 top8 中收集落在 [lower, top1] 区间的候选
+    std::vector<ScoredMove> cand;
+    for (int i = 0; i < n; i++) {
+        if (scored[i].score >= lower) cand.push_back(scored[i]);
+    }
+    if (cand.empty()) cand.push_back(scored[0]);   // 保险
+    int idx = rand() % cand.size();
+    return { cand[idx].r, cand[idx].c };
+}
+// ====================================================
 
 // 防守威胁评分（按 WIN_LEN 自动分级，PureGreed10 用）。
 // diff = WIN_LEN - count 越小威胁越大，分值越高。
@@ -98,13 +157,12 @@ bool EasyJudgeAI::isHuman() const { return false; }
 const char* EasyJudgeAI::name() const { return "EasyJudge"; }
 
 // ---------- PureGreed10：纯防守评分 ----------
-// 仅评估对方威胁，选防守价值最高的位置
+// 仅评估对方威胁，映射到 0-750，top8 区间随机选
 Pos PureGreed10::place(Board& board, ChessType color) {
     ChessType oppColor = opponent(color);
-    int bestScore = -1;
-    int bestR = -1, bestC = -1;
     int dr[] = { 0, 1, 1, 1 };
     int dc[] = { 1, 0, 1, -1 };
+    std::vector<ScoredMove> scored;
     for (int i = 0; i < ROWS; i++) {
         for (int j = 0; j < COLS; j++) {
             if (board.at(i, j) != ChessType::None) continue;
@@ -127,26 +185,21 @@ Pos PureGreed10::place(Board& board, ChessType color) {
                 }
                 blockScore += threatScore(oppCount);
             }
-            if (blockScore > bestScore) {
-                bestScore = blockScore;
-                bestR = i;
-                bestC = j;
-            }
+            scored.push_back({ mapTo750(blockScore), i, j });
         }
     }
-    return { bestR, bestC };
+    return pickBestMove(scored);
 }
 bool PureGreed10::isHuman() const { return false; }
 const char* PureGreed10::name() const { return "PureGreed 1.0"; }
 
 // ---------- PureGreed11：攻防评分 ----------
-// 同时评估自身进攻与对方威胁，选总分最高位置
+// 同时评估自身进攻与对方威胁，映射到 0-750，top8 区间随机选
 Pos PureGreed11::place(Board& board, ChessType color) {
     ChessType oppColor = opponent(color);
-    int bestScore = -1;
-    int bestR = -1, bestC = -1;
     int dr[] = { 0, 1, 1, 1 };
     int dc[] = { 1, 0, 1, -1 };
+    std::vector<ScoredMove> scored;
     for (int i = 0; i < ROWS; i++) {
         for (int j = 0; j < COLS; j++) {
             int diew[4] = { 0 };  // 各方向己方被堵端数
@@ -204,20 +257,10 @@ Pos PureGreed11::place(Board& board, ChessType color) {
                 else blockScore += 1;
             }
             int total = selfScore + blockScore;
-            if (total > bestScore) {
-                bestScore = total;
-                bestR = i;
-                bestC = j;
-            }
+            scored.push_back({ mapTo750(total), i, j });
         }
     }
-    // 兜底：理论上不会触发，保证棋盘满时仍可继续
-    if (bestR == -1) {
-        for (int i = 0; i < ROWS; i++)
-            for (int j = 0; j < COLS; j++)
-                if (board.at(i, j) == ChessType::None) return { i, j };
-    }
-    return { bestR, bestC };
+    return pickBestMove(scored);
 }
 bool PureGreed11::isHuman() const { return false; }
 const char* PureGreed11::name() const { return "PureGreed 1.1"; }
@@ -383,18 +426,16 @@ Pos MinimaxPP::place(Board& board, ChessType color) {
         board.set(m.r, m.c, ChessType::None);
     }
 
-    // 3) 正常 alpha-beta 搜索
-    Pos bestMove = moves[0];
-    int bestVal = -kInf;
-    int alpha = -kInf, beta = kInf;
+    // 3) alpha-beta 搜索每个候选，映射到 0-750，top8 区间随机选。
+    //    为保证 top8 各 val 精确，此处不更新 alpha（完整搜索每个候选）。
+    std::vector<ScoredMove> scored;
     for (const auto& m : moves) {
         board.set(m.r, m.c, color);
-        int val = minimax(board, kDepth - 1, alpha, beta, oppColor, false, color);
+        int val = minimax(board, kDepth - 1, -kInf, kInf, oppColor, false, color);
         board.set(m.r, m.c, ChessType::None);
-        if (val > bestVal) { bestVal = val; bestMove = m; }
-        if (bestVal > alpha) alpha = bestVal;
+        scored.push_back({ mapMinimaxTo750(val), m.r, m.c });
     }
-    return bestMove;
+    return pickBestMove(scored);
 }
 
 bool MinimaxPP::isHuman() const { return false; }

@@ -108,6 +108,17 @@ Player (抽象基类)
 
 统一接口：`place(board, color)` 返回落子位置；`isHuman()` / `needsDelay()` / `name()`。
 
+### 评分映射与选择（PureGreed10 / PureGreed11 / MinimaxPP 通用）
+
+三个 AI 内部原始分各不相同，统一映射到 **0-750 整数**，记录 **top8**，在 top1 下方合理区间内随机选择，增加对局多样性。
+
+| 映射函数 | 适用 | 规则 |
+|:---------|:-----|:-----|
+| `mapTo750(raw)` | PureGreed10/11 | raw≥1000000(必胜)→750；其余对数压缩 |
+| `mapMinimaxTo750(val)` | MinimaxPP | +kInf→750(必胜)，-kInf→0(必败)，0→375(中性)，正负对数压缩 |
+
+**区间随机选择 `pickBestMove`**：降序排序取 top8，区间半径 `delta = (top1==750) ? 0 : max(3, (750-top1)/10)`，在 `[top1-delta, top1]` 内随机选。必胜(750)时 delta=0 只选 750 的位置（多个则随机，均必胜）；高分窄区间、低分宽区间。
+
 ### 评分函数
 
 `threatScore(count)`（PureGreed10 用）与 `windowScore(count)`（MinimaxPP 用），按 `WIN_LEN - count` 分级：
