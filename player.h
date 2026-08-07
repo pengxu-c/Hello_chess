@@ -75,8 +75,9 @@ private:
     static constexpr int kDepth = 3;      // 搜索深度（易调）
     static constexpr int kRadius = 2;     // 候选着法半径（易调）
     static constexpr int kInf = 100000000;
-    int evaluate(const Board& board, ChessType aiColor) const;           // 局面评估
+    // 局面评估：沿 4 方向扫描连续同色线段，按长度+两端开放数评分(活/眠/死棋)
+    int evaluate(const Board& board, ChessType aiColor) const;
     int minimax(Board& board, int depth, int alpha, int beta,
-                ChessType curColor, bool isMax, ChessType aiColor);      // 递归搜索
-    std::vector<Pos> generateMoves(const Board& board) const;            // 生成候选着法
+                ChessType curColor, bool isMax, ChessType aiColor);      // alpha-beta 递归搜索
+    std::vector<Pos> generateMoves(const Board& board) const;            // 生成候选着法(已有棋子周围 kRadius 内空位)
 };

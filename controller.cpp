@@ -129,7 +129,7 @@ void GameController::playOneGame() {
                     ui_->messageBox(L"棋盘已满，平局！");
                     running = false;
                 } else {
-                    // 切换回合
+                    // 切换回合：颜色取反，玩家指针交换
                     currentColor = opponent(currentColor);
                     current = (current == player1_) ? player2_ : player1_;
                 }

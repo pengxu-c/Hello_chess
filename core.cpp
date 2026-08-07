@@ -81,6 +81,9 @@ bool Judge::checkLine(const Board& b, int r, int c, int dr, int dc, int chess, i
     return true;
 }
 
+// 检查最后落子 last 是否使 color 方形成 length 连珠。
+// 对每个方向，从 last 向反方向回退 offset(0..length-1) 作为线段起点，
+// 再沿正方向检查 length 个连续同色——覆盖 last 处于连珠任意位置的情况。
 bool Judge::checkWin(const Board& b, Pos last, ChessType color, int length) const {
     if (!last.valid()) return false;
     int r = last.r, c = last.c;
@@ -89,7 +92,7 @@ bool Judge::checkWin(const Board& b, Pos last, ChessType color, int length) cons
     int chess = static_cast<int>(color);
     for (int d = 0; d < 4; d++) {
         for (int offset = 0; offset < length; offset++) {
-            int sr = r - offset * dr[d];
+            int sr = r - offset * dr[d];   // 线段起点 = last 反方向回退 offset
             int sc = c - offset * dc[d];
             if (checkLine(b, sr, sc, dr[d], dc[d], chess, length)) return true;
         }
