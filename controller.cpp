@@ -26,6 +26,7 @@ Player* GameController::createPlayer(int choice) {
         case 2: return new EasyJudgeAI(judge_, stats_);
         case 3: return new PureGreed10();
         case 4: return new PureGreed11();
+        case 5: return new MinimaxPP(judge_);
         default: return new HumanPlayer(*ui_);
     }
 }
@@ -43,7 +44,8 @@ void GameController::selectPlayers() {
     printf("  1. Human\n");
     printf("  2. EasyJudge (super easy: random + block)\n");
     printf("  3. PureGreed 1.0 (defense-only scoring)\n");
-    printf("  4. PureGreed 1.1 (attack+defense scoring)\n\n");
+    printf("  4. PureGreed 1.1 (attack+defense scoring)\n");
+    printf("  5. Minimax++ (alpha-beta search)\n\n");
 
     int c1 = 0, c2 = 0;
     printf("Choose player 1 (Black, first) type number: ");
@@ -72,7 +74,7 @@ void GameController::playOneGame() {
 
     while (running) {
         // AI 回合延迟，便于观察
-        if (!current->isHuman()) Sleep(500);
+        if (current->needsDelay()) Sleep(500);
 
         ui_->pollMouse();
         Pos pos = current->place(board_, currentColor);

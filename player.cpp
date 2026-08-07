@@ -17,6 +17,7 @@ Pos HumanPlayer::place(Board& board, ChessType color) {
     return p;
 }
 bool HumanPlayer::isHuman() const { return true; }
+bool HumanPlayer::needsDelay() const { return false; }
 const char* HumanPlayer::name() const { return "Human"; }
 
 // ---------- EasyJudgeAI ----------
@@ -193,3 +194,122 @@ Pos PureGreed11::place(Board& board, ChessType color) {
 }
 bool PureGreed11::isHuman() const { return false; }
 const char* PureGreed11::name() const { return "PureGreed 1.1"; }
+
+// ---------- Minimax++：alpha-beta 剪枝搜索 ----------
+MinimaxPP::MinimaxPP(Judge& judge) : judge_(judge) {}
+
+// 局面评估：遍历所有长度6窗口，按己方/对方纯窗口子数评分
+int MinimaxPP::evaluate(const Board& board, ChessType aiColor) const {
+    static const int lineScore[7] = { 0, 1, 50, 500, 5000, 50000, 1000000 };
+    int dr[] = { 0, 1, 1, 1 };
+    int dc[] = { 1, 0, 1, -1 };
+    ChessType oppColor = opponent(aiColor);
+    int score = 0;
+    for (int d = 0; d < 4; d++) {
+        for (int r = 0; r < ROWS; r++) {
+            for (int c = 0; c < COLS; c++) {
+                if (!board.inBounds(r + 5 * dr[d], c + 5 * dc[d])) continue;
+                int self = 0, opp = 0;
+                for (int i = 0; i < 6; i++) {
+                    ChessType t = board.at(r + i * dr[d], c + i * dc[d]);
+                    if (t == aiColor) self++;
+                    else if (t == oppColor) opp++;
+                }
+                if (self > 0 && opp == 0) score += lineScore[self];
+                else if (opp > 0 && self == 0) score -= lineScore[opp];
+            }
+        }
+    }
+    return score;
+}
+
+// 生成候选着法：已有棋子周围 kRadius 内的空位
+std::vector<Pos> MinimaxPP::generateMoves(const Board& board) const {
+    std::vector<Pos> moves;
+    bool hasAny = false;
+    for (int r = 0; r < ROWS && !hasAny; r++)
+        for (int c = 0; c < COLS; c++)
+            if (board.at(r, c) != ChessType::None) { hasAny = true; break; }
+    if (!hasAny) { moves.push_back({ ROWS / 2, COLS / 2 }); return moves; }
+    std::vector<std::vector<bool>> nearby(ROWS, std::vector<bool>(COLS, false));
+    for (int r = 0; r < ROWS; r++) {
+        for (int c = 0; c < COLS; c++) {
+            if (board.at(r, c) == ChessType::None) continue;
+            for (int dr = -kRadius; dr <= kRadius; dr++) {
+                for (int dc = -kRadius; dc <= kRadius; dc++) {
+                    int nr = r + dr, nc = c + dc;
+                    if (board.inBounds(nr, nc) && board.at(nr, nc) == ChessType::None)
+                        nearby[nr][nc] = true;
+                }
+            }
+        }
+    }
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            if (nearby[r][c]) moves.push_back({ r, c });
+    return moves;
+}
+
+// alpha-beta 递归搜索
+int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
+                       ChessType curColor, bool isMax, ChessType aiColor) {
+    if (depth == 0) return evaluate(board, aiColor);
+    auto moves = generateMoves(board);
+    if (moves.empty()) return evaluate(board, aiColor);
+    if (isMax) {
+        int best = -kInf;
+        for (const auto& m : moves) {
+            board.set(m.r, m.c, curColor);
+            if (judge_.checkWin(board, m, curColor, 6)) {
+                board.set(m.r, m.c, ChessType::None);
+                return kInf - (kDepth - depth);   // 越浅赢越好
+            }
+            int val = minimax(board, depth - 1, alpha, beta, opponent(curColor), false, aiColor);
+            board.set(m.r, m.c, ChessType::None);
+            if (val > best) best = val;
+            if (best > alpha) alpha = best;
+            if (alpha >= beta) break;
+        }
+        return best;
+    } else {
+        int best = kInf;
+        for (const auto& m : moves) {
+            board.set(m.r, m.c, curColor);
+            if (judge_.checkWin(board, m, curColor, 6)) {
+                board.set(m.r, m.c, ChessType::None);
+                return -kInf + (kDepth - depth);
+            }
+            int val = minimax(board, depth - 1, alpha, beta, opponent(curColor), true, aiColor);
+            board.set(m.r, m.c, ChessType::None);
+            if (val < best) best = val;
+            if (best < beta) beta = best;
+            if (alpha >= beta) break;
+        }
+        return best;
+    }
+}
+
+// 顶层：枚举候选着法，选评估最高者
+Pos MinimaxPP::place(Board& board, ChessType color) {
+    auto moves = generateMoves(board);
+    if (moves.empty()) return { -1, -1 };
+    Pos bestMove = moves[0];
+    int bestVal = -kInf;
+    int alpha = -kInf, beta = kInf;
+    for (const auto& m : moves) {
+        board.set(m.r, m.c, color);
+        if (judge_.checkWin(board, m, color, 6)) {
+            board.set(m.r, m.c, ChessType::None);
+            return m;   // 直接获胜
+        }
+        int val = minimax(board, kDepth - 1, alpha, beta, opponent(color), false, color);
+        board.set(m.r, m.c, ChessType::None);
+        if (val > bestVal) { bestVal = val; bestMove = m; }
+        if (bestVal > alpha) alpha = bestVal;
+    }
+    return bestMove;
+}
+
+bool MinimaxPP::isHuman() const { return false; }
+bool MinimaxPP::needsDelay() const { return false; }
+const char* MinimaxPP::name() const { return "Minimax++"; }
