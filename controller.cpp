@@ -8,9 +8,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <windows.h>
+#include <ctime>
 
 GameController::GameController() {
     ui_ = new UI();
+    srand((unsigned int)time(NULL));
 }
 
 GameController::~GameController() {
