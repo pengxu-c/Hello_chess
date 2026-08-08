@@ -53,6 +53,7 @@ static Pos pickBestMove(std::vector<ScoredMove>& scored) {
     int top1 = scored[0].score;
     int rawDelta = (750 - top1) / 10;
     int delta = (top1 >= 750) ? 0 : (rawDelta < 3 ? 3 : rawDelta);   // 必胜→0；高分窄、低分宽
+    if(delta>=20)  delta=20;   //不能超过20了
     int lower = top1 - delta;
     // 在 top8 中收集落在 [lower, top1] 区间的候选
     std::vector<ScoredMove> cand;
