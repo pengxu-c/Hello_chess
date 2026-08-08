@@ -14,6 +14,7 @@ class Stats;
 // ---- 棋手抽象基类 ----
 class Player {
 public:
+    static bool randomEnabled;                                 // 随机机制开关（默认 false）
     virtual ~Player() = default;
     virtual Pos place(Board& board, ChessType color) = 0;  // 返回落子位置（无效表示本帧不落子）
     virtual bool isHuman() const = 0;                       // 是否为人类
@@ -41,7 +42,7 @@ public:
     bool isHuman() const override;
     const char* name() const override;
 private:
-    bool canBlockFive(Board& board, int r, int c, ChessType oppColor);  // 检测落子能否阻挡对方五连
+
     Judge& judge_;
     Stats& stats_;
 };

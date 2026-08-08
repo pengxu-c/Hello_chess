@@ -79,10 +79,11 @@ void GameController::selectPlayers() {
     printf("  5. Minimax++ (alpha-beta search)\n\n");
 
     int c1 = 0, c2 = 0;
+    char buf2[64];
     printf("Choose player 1 (Black, first) type number: ");
-    if (scanf_s("%d", &c1) != 1) c1 = 1;
+    if (!fgets(buf2, sizeof(buf2), stdin) || sscanf_s(buf2, "%d", &c1) != 1) c1 = 1;
     printf("Choose player 2 (White, second) type number: ");
-    if (scanf_s("%d", &c2) != 1) c2 = 1;
+    if (!fgets(buf2, sizeof(buf2), stdin) || sscanf_s(buf2, "%d", &c2) != 1) c2 = 1;
 
     delete player1_;
     delete player2_;
@@ -114,7 +115,7 @@ void GameController::playOneGame() {
             if (board_.at(pos.r, pos.c) != ChessType::None) {
                 // 该位置已有棋子
                 if (current->isHuman()) {
-                    ui_->messageBox(L"此处已有棋子，请选择空位！");
+                    ui_->messageBox(L"Occupied! Choose an empty cell.");
                 }
             } else {
                 // 落子
@@ -124,11 +125,11 @@ void GameController::playOneGame() {
 
                 // 判定胜负
                 if (judge_.checkWin(board_, pos, currentColor, winLength_)) {
-                    const wchar_t* who = (current == player1_) ? L"玩家1 获胜！" : L"玩家2 获胜！";
+                    const wchar_t* who = (current == player1_) ? L"Player 1 wins!" : L"Player 2 wins!";
                     ui_->messageBox(who);
                     running = false;
                 } else if (board_.isFull()) {
-                    ui_->messageBox(L"棋盘已满，平局！");
+                    ui_->messageBox(L"Board full! Draw!");
                     running = false;
                 } else {
                     // 切换回合：颜色取反，玩家指针交换
@@ -142,18 +143,27 @@ void GameController::playOneGame() {
     }
 }
 
-// 主入口
+// 主入口：外层循环允许结束后回到主菜单重新选择棋手
 void GameController::run() {
-    selectPlayers();
-    ui_->initWindow(960, 600);
-    ui_->loadBackground("Resource/images/bk.jpg");
-    system("cls");
+    while (true) {
+        selectPlayers();
+        ui_->initWindow(960, 600);
+        ui_->loadBackground("Resource/images/bk.jpg");
+        system("cls");
 
-    bool playAgain = true;
-    while (playAgain) {
-        playOneGame();
-        playAgain = (ui_->askYesNo(L"是否再来一局？") == IDYES);
+        // 同一棋手组合下可连续对局
+        bool playAgain = true;
+        while (playAgain) {
+            playOneGame();
+            playAgain = (ui_->askYesNo(L"Play again?") == IDYES);
+        }
+
+        ui_->close();
+
+        // 窗口已关，控制台询问是否回到主菜单重新选择棋手
+        printf("Return to main menu? (y/n): ");
+        char buf[16];
+        if (!fgets(buf, sizeof(buf), stdin)) break;
+        if (buf[0] != 'y' && buf[0] != 'Y') break;
     }
-
-    ui_->close();
 }

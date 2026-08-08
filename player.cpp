@@ -8,93 +8,176 @@
 #include <cmath>
 #include <algorithm>
 
-// ==================== 通用评分工具 ====================
-// 三个 AI 的内部原始分各不相同，统一映射到 0-750 整数，
-// 记录 top8，在 top1 下方合理区间内随机选择，增加对局多样性。
-// 设计约束：必胜 → 750，此时区间仅含 750 的位置（随机选也必胜）。
+// ==================== 4 评分标准 + 必胜类 + 禁用机制 + 选择器 ====================
+//
+// 4 个独立评分标准，各算法按需组合：
+//   标准一(0-150) 防守威胁     EasyJudge 基础
+//   标准二(0-150) 防守连续性   PG 1.0 追加
+//   标准三(0-150) 进攻潜力     PG 1.1 追加
+//   标准四(0-300) Minimax混合  MinimaxPP 追加(搜索+即时进攻+即时防守)
+//
+// 必胜类：1步必胜(自己成连) + 2步必胜(下m后>=2个成连点)，所有AI优先调用。
+// 禁用机制：对方活(WIN_LEN-2)连及以上时禁随机，只在必防位置精确选。
+// 随机机制：top3 + 极窄区间随机。
+// --------------------------------------------------------------------
 
-// 评分位置结构（映射后的 0-750 分 + 坐标）
-struct ScoredMove {
-    int score;  // 0-750
-    int r, c;
-};
+struct ScoredMove { int score, r, c; };
 
-// 非负原始分 → 0-750（PureGreed10/11 用）。
-// raw >= 1000000(必胜级) → 750；其余对数压缩，使分值分布均匀。
-static int mapTo750(int raw) {
-    if (raw >= 1000000) return 750;
-    if (raw <= 0) return 0;
-    return (int)(749.0 * std::log(1.0 + raw) / std::log(1.0 + 1000000.0));
+// 连续线段评分：count=连续长度, openEnds=两端开放数(0/1/2), maxVal=上限
+static int mapSeg(int count, int openEnds, int maxVal) {
+    if (count >= WIN_LEN) return maxVal;
+    if (openEnds == 0)    return 0;
+    int diff = WIN_LEN - count;
+    bool live = (openEnds == 2);
+    if (diff == 1) return live ? maxVal * 14 / 15 : maxVal * 10 / 15;
+    if (diff == 2) return live ? maxVal * 11 / 15 : maxVal *  7 / 15;
+    if (diff == 3) return live ? maxVal *  8 / 15 : maxVal *  4 / 15;
+    if (diff == 4) return live ? maxVal *  5 / 15 : maxVal *  2 / 15;
+    return live ? maxVal * 2 / 15 : 1;
 }
 
-// minimax 值(±kInf) → 0-750（MinimaxPP 用）。
-// +kInf → 750(必胜)，-kInf → 0(必败)，0 → 375(中性)，正负两侧对数压缩。
-static int mapMinimaxTo750(int val) {
+// 模拟在 (r,c) 落 color 子后，4 方向最大连续+开放评分，映射到 maxVal。调用后恢复棋盘。
+static int simMaxSeg(Board& board, int r, int c, ChessType color, int maxVal) {
+    board.set(r, c, color);
+    int best = 0;
+    int dr[] = {0, 1, 1, 1}, dc[] = {1, 0, 1, -1};
+    for (int d = 0; d < 4; d++) {
+        int count = 1;
+        int nr = r + dr[d], nc = c + dc[d];
+        while (board.inBounds(nr, nc) && board.at(nr, nc) == color) { count++; nr += dr[d]; nc += dc[d]; }
+        bool openE = board.inBounds(nr, nc) && board.at(nr, nc) == ChessType::None;
+        int pr = r - dr[d], pc = c - dc[d];
+        while (board.inBounds(pr, pc) && board.at(pr, pc) == color) { count++; pr -= dr[d]; pc -= dc[d]; }
+        bool openS = board.inBounds(pr, pc) && board.at(pr, pc) == ChessType::None;
+        int s = mapSeg(count, (openS ? 1 : 0) + (openE ? 1 : 0), maxVal);
+        if (s > best) best = s;
+    }
+    board.set(r, c, ChessType::None);
+    return best;
+}
+
+// 标准一(0-150)：防守威胁 — 模拟对方落子后最大连续威胁
+static int crit1(Board& b, int r, int c, ChessType opp) { return simMaxSeg(b, r, c, opp, 150); }
+
+// 标准二(0-150)：防守连续性 — 不模拟，评估阻断对方现有连续的价值
+static int crit2(const Board& board, int r, int c, ChessType opp) {
+    int dr[] = {0, 1, 1, 1}, dc[] = {1, 0, 1, -1};
+    int best = 0;
+    for (int d = 0; d < 4; d++) {
+        int cnt = 0;
+        for (int s = 1; s <= WIN_LEN - 1; s++) { int ni = r + s*dr[d], nj = c + s*dc[d]; if (!board.inBounds(ni, nj)) break; if (board.at(ni, nj) == opp) cnt++; else break; }
+        for (int s = 1; s <= WIN_LEN - 1; s++) { int ni = r - s*dr[d], nj = c - s*dc[d]; if (!board.inBounds(ni, nj)) break; if (board.at(ni, nj) == opp) cnt++; else break; }
+        int v = mapSeg(cnt, 2, 150);
+        if (v > best) best = v;
+    }
+    return best;
+}
+
+// 标准三(0-150)：进攻潜力 — 模拟己方落子后最大连续+开放
+static int crit3(Board& b, int r, int c, ChessType me) { return simMaxSeg(b, r, c, me, 150); }
+
+// 标准四(0-300)：Minimax混合 = 搜索(0-100) + 即时进攻(0-100) + 即时防守(0-100)
+static int crit4_search(int val) {
     const int INF = 100000000;
-    if (val >= INF - 100) return 750;
+    if (val >= INF - 100) return 100;
     if (val <= -INF + 100) return 0;
     if (val >= 0) {
-        return 375 + (int)(375.0 * std::log(1.0 + val) / std::log(1.0 + 1000000.0));
+        if (val >= 1000000) return 100;
+        return 50 + (int)(50.0 * std::log(1.0 + val) / std::log(1000001.0));
     } else {
-        return 375 - (int)(375.0 * std::log(1.0 - val) / std::log(1.0 + 1000000.0));
+        if (-val >= 1000000) return 0;
+        return 50 - (int)(50.0 * std::log(1.0 - val) / std::log(1000001.0));
     }
 }
+static int crit4_mix(Board& b, int r, int c, ChessType me, ChessType opp, int searchVal) {
+    return crit4_search(searchVal) + simMaxSeg(b, r, c, me, 100) + simMaxSeg(b, r, c, opp, 100);
+}
 
-// 在 scored 列表中：降序排序取 top8，在 top1 下方 delta 区间内随机选。
-// 区间半径 delta：
-//   top1 == 750(必胜) → delta=0，只选 750 的位置（多个则随机）；
-//   否则 delta = max(3, (750-top1)/10)，高分窄区间、低分宽区间。
+// 独立连珠检查：在 (r,c) 落 color 子后是否形成 n 连（不依赖 Judge）
+static bool inlineCheckN(const Board& board, int r, int c, ChessType color, int n) {
+    int dr[] = {0, 1, 1, 1}, dc[] = {1, 0, 1, -1};
+    for (int d = 0; d < 4; d++) {
+        int count = 1;
+        for (int s = 1; s < n; s++) { int nr = r + s*dr[d], nc = c + s*dc[d]; if (!board.inBounds(nr, nc) || board.at(nr, nc) != color) break; count++; }
+        for (int s = 1; s < n; s++) { int nr = r - s*dr[d], nc = c - s*dc[d]; if (!board.inBounds(nr, nc) || board.at(nr, nc) != color) break; count++; }
+        if (count >= n) return true;
+    }
+    return false;
+}
+
+// 必胜类：1步必胜(自己成连) + 2步必胜(下m后>=2个成连点，对方堵一个还有另一个)
+// 所有 AI 在 place() 开头调用，检测到必胜直接返回，保证两步内获胜。
+static Pos findWinMove(Board& board, ChessType color) {
+    // 1步必胜
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++) {
+            if (board.at(r, c) != ChessType::None) continue;
+            board.set(r, c, color);
+            bool win = inlineCheckN(board, r, c, color, WIN_LEN);
+            board.set(r, c, ChessType::None);
+            if (win) return {r, c};
+        }
+    // 2步必胜：下m后自己有>=2个成连点
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++) {
+            if (board.at(r, c) != ChessType::None) continue;
+            board.set(r, c, color);
+            int winSpots = 0;
+            for (int r2 = 0; r2 < ROWS && winSpots < 2; r2++)
+                for (int c2 = 0; c2 < COLS && winSpots < 2; c2++) {
+                    if (board.at(r2, c2) != ChessType::None) continue;
+                    board.set(r2, c2, color);
+                    if (inlineCheckN(board, r2, c2, color, WIN_LEN)) winSpots++;
+                    board.set(r2, c2, ChessType::None);
+                }
+            board.set(r, c, ChessType::None);
+            if (winSpots >= 2) return {r, c};
+        }
+    return {-1, -1};
+}
+
+// 禁用机制：模拟对方在每个空位落子，若形成 (WIN_LEN-1) 连则该位置必防。
+// 与 EasyJudge 同理，能识别连续、跳棋等所有威胁模式。
+static std::vector<Pos> findMustDefend(Board& board, ChessType opp) {
+    std::vector<Pos> res;
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++) {
+            if (board.at(r, c) != ChessType::None) continue;
+            board.set(r, c, opp);
+            bool threat = inlineCheckN(board, r, c, opp, WIN_LEN - 1);
+            board.set(r, c, ChessType::None);
+            if (threat) res.push_back({r, c});
+        }
+    return res;
+}
+
+// 随机机制开关（默认关闭，关闭时 pickBestMove 退化为选最高分）
+bool Player::randomEnabled = false;
+
+// 不随机：选最高分
+static Pos pickBestNoRandom(std::vector<ScoredMove>& scored) {
+    if (scored.empty()) return {-1, -1};
+    int bi = 0;
+    for (int i = 1; i < (int)scored.size(); i++) if (scored[i].score > scored[bi].score) bi = i;
+    return {scored[bi].r, scored[bi].c};
+}
+
+// top3 + 极窄区间随机：高分几乎不随机，低分少量随机（开关关闭时退化为选最高分）
 static Pos pickBestMove(std::vector<ScoredMove>& scored) {
-    if (scored.empty()) return { -1, -1 };
-    std::sort(scored.begin(), scored.end(),
-              [](const ScoredMove& a, const ScoredMove& b) { return a.score > b.score; });
-    int n = (int)scored.size();
-    if (n > 8) n = 8;                          // 只看 top 8
+    if (!Player::randomEnabled) return pickBestNoRandom(scored);
+    if (scored.empty()) return {-1, -1};
+    std::sort(scored.begin(), scored.end(), [](const ScoredMove& a, const ScoredMove& b) { return a.score > b.score; });
+    int n = (int)scored.size(); if (n > 3) n = 3;   // top3
     int top1 = scored[0].score;
-    int rawDelta = (750 - top1) / 10;
-    int delta = (top1 >= 750) ? 0 : (rawDelta < 3 ? 3 : rawDelta);   // 必胜→0；高分窄、低分宽
-    if(delta>=20)  delta=20;   //不能超过20了
+    int delta = (top1 >= 700) ? 1 : (top1 >= 500) ? 2 : (top1 >= 300) ? 3 : 5;
     int lower = top1 - delta;
-    // 在 top8 中收集落在 [lower, top1] 区间的候选
     std::vector<ScoredMove> cand;
-    for (int i = 0; i < n; i++) {
-        if (scored[i].score >= lower) cand.push_back(scored[i]);
-    }
-    if (cand.empty()) cand.push_back(scored[0]);   // 保险
+    for (int i = 0; i < n; i++) if (scored[i].score >= lower) cand.push_back(scored[i]);
+    if (cand.empty()) cand.push_back(scored[0]);
     int idx = rand() % cand.size();
-    return { cand[idx].r, cand[idx].c };
+    return {cand[idx].r, cand[idx].c};
 }
-// ====================================================
-
-// 防守威胁评分（按 WIN_LEN 自动分级，PureGreed10 用）。
-// diff = WIN_LEN - count 越小威胁越大，分值越高。
-static int threatScore(int count) {
-    if (count >= WIN_LEN) return 1000000;
-    if (count <= 0) return 0;
-    int diff = WIN_LEN - count;
-    switch (diff) {
-        case 1: return 40000;   // 活四：对方下一步成五
-        case 2: return 20000;   // 活三
-        case 3: return 2000;    // 活二
-        case 4: return 200;     // 活一
-        default: return 1;
-    }
-}
-
-// Minimax 窗口评分（按 WIN_LEN 自动分级）。
-// 注：当前 MinimaxPP::evaluate 已改用连续线段评估，此函数保留供参考/扩展。
-static int windowScore(int count) {
-    if (count >= WIN_LEN) return 1000000;
-    if (count <= 0) return 0;
-    int diff = WIN_LEN - count;
-    switch (diff) {
-        case 1: return 50000;
-        case 2: return 5000;
-        case 3: return 500;
-        case 4: return 50;
-        default: return 1;
-    }
-}
+// ====================================================================
 
 // ---------- HumanPlayer ----------
 HumanPlayer::HumanPlayer(UI& ui) : ui_(ui) {}
@@ -113,154 +196,69 @@ const char* HumanPlayer::name() const { return "Human"; }
 // ---------- EasyJudgeAI ----------
 EasyJudgeAI::EasyJudgeAI(Judge& judge, Stats& stats) : judge_(judge), stats_(stats) {}
 
-// 检测在 (r,c) 落对方子后是否形成 (WIN_LEN-1) 连（即此处需防守）
-bool EasyJudgeAI::canBlockFive(Board& board, int r, int c, ChessType oppColor) {
-    ChessType old = board.at(r, c);
-    board.set(r, c, oppColor);
-    bool win = judge_.checkWin(board, { r, c }, oppColor, WIN_LEN - 1);
-    board.set(r, c, old);
-    return win;
-}
 
-// 超简单 AI：对方步数<60 时优先防输，否则随机落子
+// EasyJudge: 必胜类 → 禁用机制 → 标准一(防守威胁 0-150)
 Pos EasyJudgeAI::place(Board& board, ChessType color) {
-    ChessType oppColor = opponent(color);
-    if (stats_.count(oppColor) < 60) {
-        for (int i = 0; i < ROWS; i++) {
-            for (int j = 0; j < COLS; j++) {
-                if (board.at(i, j) == ChessType::None && canBlockFive(board, i, j, oppColor)) {
-                    return { i, j };
-                }
-            }
-        }
+    ChessType opp = opponent(color);
+    Pos win = findWinMove(board, color);
+    if (win.r >= 0) return win;
+    auto must = findMustDefend(board, opp);
+    std::vector<ScoredMove> scored;
+    if (!must.empty()) {
+        for (auto& m : must) scored.push_back({crit1(board, m.r, m.c, opp), m.r, m.c});
+        return pickBestNoRandom(scored);
     }
-    // 收集所有空位，随机选一个
-    int (*empty)[2] = new int[ROWS * COLS][2];
-    int count = 0;
-    for (int i = 0; i < ROWS; i++) {
+    for (int i = 0; i < ROWS; i++)
         for (int j = 0; j < COLS; j++) {
-            if (board.at(i, j) == ChessType::None) {
-                empty[count][0] = i;
-                empty[count][1] = j;
-                count++;
-            }
+            if (board.at(i, j) != ChessType::None) continue;
+            scored.push_back({crit1(board, i, j, opp), i, j});
         }
-    }
-    Pos result = { -1, -1 };
-    if (count > 0) {
-        int idx = rand() % count;
-        result = { empty[idx][0], empty[idx][1] };
-    }
-    delete[] empty;
-    return result;
+    return pickBestMove(scored);
 }
 bool EasyJudgeAI::isHuman() const { return false; }
 const char* EasyJudgeAI::name() const { return "EasyJudge"; }
 
-// ---------- PureGreed10：纯防守评分 ----------
-// 仅评估对方威胁，映射到 0-750，top8 区间随机选
+// ---------- PureGreed10：必胜类 → 禁用机制 → 标准一 + 标准二 (0-300) ----------
 Pos PureGreed10::place(Board& board, ChessType color) {
-    ChessType oppColor = opponent(color);
-    int dr[] = { 0, 1, 1, 1 };
-    int dc[] = { 1, 0, 1, -1 };
+    ChessType opp = opponent(color);
+    Pos win = findWinMove(board, color);
+    if (win.r >= 0) return win;
+    auto must = findMustDefend(board, opp);
     std::vector<ScoredMove> scored;
-    for (int i = 0; i < ROWS; i++) {
+    if (!must.empty()) {
+        for (auto& m : must) scored.push_back({crit1(board, m.r, m.c, opp) + crit2(board, m.r, m.c, opp), m.r, m.c});
+        return pickBestNoRandom(scored);
+    }
+    for (int i = 0; i < ROWS; i++)
         for (int j = 0; j < COLS; j++) {
             if (board.at(i, j) != ChessType::None) continue;
-            int blockScore = 0;
-            for (int d = 0; d < 4; d++) {
-                int oppCount = 0;
-                // 正方向扫描对方连续子数
-                for (int step = 1; step <= WIN_LEN - 1; step++) {
-                    int ni = i + step * dr[d], nj = j + step * dc[d];
-                    if (!board.inBounds(ni, nj)) break;
-                    if (board.at(ni, nj) == oppColor) oppCount++;
-                    else break;
-                }
-                // 反方向扫描
-                for (int step = 1; step <= WIN_LEN - 1; step++) {
-                    int ni = i - step * dr[d], nj = j - step * dc[d];
-                    if (!board.inBounds(ni, nj)) break;
-                    if (board.at(ni, nj) == oppColor) oppCount++;
-                    else break;
-                }
-                blockScore += threatScore(oppCount);
-            }
-            scored.push_back({ mapTo750(blockScore), i, j });
+            scored.push_back({crit1(board, i, j, opp) + crit2(board, i, j, opp), i, j});
         }
-    }
     return pickBestMove(scored);
 }
 bool PureGreed10::isHuman() const { return false; }
 const char* PureGreed10::name() const { return "PureGreed 1.0"; }
 
-// ---------- PureGreed11：攻防评分 ----------
-// 同时评估自身进攻与对方威胁，映射到 0-750，top8 区间随机选
+// ---------- PureGreed11：必胜类 → 禁用机制 → 标准一 + 标准二 + 标准三 (0-450) ----------
 Pos PureGreed11::place(Board& board, ChessType color) {
-    ChessType oppColor = opponent(color);
-    int dr[] = { 0, 1, 1, 1 };
-    int dc[] = { 1, 0, 1, -1 };
+    ChessType opp = opponent(color);
+    Pos win = findWinMove(board, color);
+    if (win.r >= 0) return win;
+    auto must = findMustDefend(board, opp);
     std::vector<ScoredMove> scored;
-    for (int i = 0; i < ROWS; i++) {
-        for (int j = 0; j < COLS; j++) {
-            int diew[4] = { 0 };  // 各方向己方被堵端数
-            int dieb[4] = { 0 };  // 各方向对方被堵端数
-            if (board.at(i, j) != ChessType::None) continue;
-            int selfScore = 0, blockScore = 0;
-            for (int d = 0; d < 4; d++) {
-                // 己方连续子数（正反方向）
-                int selfCount = 0;
-                for (int step = 1; step <= WIN_LEN - 1; step++) {
-                    int ni = i + step * dr[d], nj = j + step * dc[d];
-                    if (!board.inBounds(ni, nj)) break;
-                    if (board.at(ni, nj) == color) selfCount++;
-                    else if (board.at(ni, nj) == oppColor) { diew[d]++; break; }
-                    else break;
-                }
-                for (int step = 1; step <= WIN_LEN - 1; step++) {
-                    int ni = i - step * dr[d], nj = j - step * dc[d];
-                    if (!board.inBounds(ni, nj)) break;
-                    if (board.at(ni, nj) == color) selfCount++;
-                    else if (board.at(ni, nj) == oppColor) { diew[d]++; break; }
-                    else break;
-                }
-                // 对方连续子数（正反方向）
-                int oppCount = 0;
-                for (int step = 1; step <= WIN_LEN - 1; step++) {
-                    int ni = i + step * dr[d], nj = j + step * dc[d];
-                    if (!board.inBounds(ni, nj)) break;
-                    if (board.at(ni, nj) == oppColor) oppCount++;
-                    else if (board.at(ni, nj) == color) { dieb[d]++; break; }
-                    else break;
-                }
-                for (int step = 1; step <= WIN_LEN - 1; step++) {
-                    int ni = i - step * dr[d], nj = j - step * dc[d];
-                    if (!board.inBounds(ni, nj)) break;
-                    if (board.at(ni, nj) == oppColor) oppCount++;
-                    else if (board.at(ni, nj) == color) { dieb[d]++; break; }
-                    else break;
-                }
-                // 进攻评分（按 WIN_LEN 分级，区分活/死棋）
-                // diew[d]>=2 表示该方向两端都被对方封堵(死棋)，分值大幅降低
-                int selfDiff = WIN_LEN - selfCount;
-                if (selfCount >= WIN_LEN) selfScore += 1000000;
-                else if (selfDiff == 1) { if (diew[d] >= 2) selfScore += 100; else selfScore += 40000; }   // 活四/冲四
-                else if (selfDiff == 2) { if (diew[d] >= 2) selfScore += 30; else selfScore += 10000; }    // 活三/眠三
-                else if (selfDiff == 3) { if (diew[d] >= 2) selfScore += 20; else selfScore += 1000; }     // 活二/眠二
-                else if (selfDiff >= 4) { if (diew[d] >= 2) selfScore += 5; else selfScore += 100; }       // 活一/眠一
-                // 防守评分（对方威胁，dieb[d]>=2 表示两端被己方封堵）
-                int oppDiff = WIN_LEN - oppCount;
-                if (oppCount >= WIN_LEN) blockScore += 50000;
-                else if (oppDiff == 1) { if (dieb[d] >= 2) blockScore += 100; else blockScore += 30000; }  // 必防
-                else if (oppDiff == 2) { if (dieb[d] >= 2) blockScore += 80; else blockScore += 20000; }
-                else if (oppDiff == 3) { if (dieb[d] >= 2) blockScore += 10; else blockScore += 2000; }
-                else if (oppDiff == 4) { if (dieb[d] >= 2) blockScore += 1; else blockScore += 200; }
-                else blockScore += 1;
-            }
-            int total = selfScore + blockScore;
-            scored.push_back({ mapTo750(total), i, j });
+    if (!must.empty()) {
+        for (auto& m : must) {
+            int s = crit1(board, m.r, m.c, opp) + crit2(board, m.r, m.c, opp) + crit3(board, m.r, m.c, color);
+            scored.push_back({s, m.r, m.c});
         }
+        return pickBestNoRandom(scored);
     }
+    for (int i = 0; i < ROWS; i++)
+        for (int j = 0; j < COLS; j++) {
+            if (board.at(i, j) != ChessType::None) continue;
+            int s = crit1(board, i, j, opp) + crit2(board, i, j, opp) + crit3(board, i, j, color);
+            scored.push_back({s, i, j});
+        }
     return pickBestMove(scored);
 }
 bool PureGreed11::isHuman() const { return false; }
@@ -402,40 +400,31 @@ int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
     }
 }
 
-// 顶层决策：先抢自己成五，再防对方成五，否则 alpha-beta 搜索选最优
+// 顶层决策：必胜类 → 禁用机制 → 标准一(防守 0-150) + 标准四混合(0-300) = 0-450
 Pos MinimaxPP::place(Board& board, ChessType color) {
+    ChessType opp = opponent(color);
+
+    // 0) 必胜类：1步或2步必胜
+    Pos win = findWinMove(board, color);
+    if (win.r >= 0) return win;
+
     auto moves = generateMoves(board);
     if (moves.empty()) return { -1, -1 };
-    ChessType oppColor = opponent(color);
 
-    // 1) 自己能直接成连 → 立即获胜
-    for (const auto& m : moves) {
-        board.set(m.r, m.c, color);
-        if (judge_.checkWin(board, m, color, WIN_LEN)) {
-            board.set(m.r, m.c, ChessType::None);
-            return m;
-        }
-        board.set(m.r, m.c, ChessType::None);
-    }
-    // 2) 对方能直接成连 → 必须在该位置防守（否则下一步必输）
-    for (const auto& m : moves) {
-        board.set(m.r, m.c, oppColor);
-        if (judge_.checkWin(board, m, oppColor, WIN_LEN)) {
-            board.set(m.r, m.c, ChessType::None);
-            return m;
-        }
-        board.set(m.r, m.c, ChessType::None);
-    }
+    // 1) 禁用机制：对方有活 (WIN_LEN-2) 连及以上 → 只在必防位置中精确选（不随机）
+    auto must = findMustDefend(board, opp);
+    const auto& cands = must.empty() ? moves : must;
 
-    // 3) alpha-beta 搜索每个候选，映射到 0-750，top8 区间随机选。
-    //    为保证 top8 各 val 精确，此处不更新 alpha（完整搜索每个候选）。
+    // 2) 标准一(防守威胁 0-150) + 标准四混合(搜索+即时进攻+即时防守 0-300) = 0-450
     std::vector<ScoredMove> scored;
-    for (const auto& m : moves) {
+    for (const auto& m : cands) {
         board.set(m.r, m.c, color);
-        int val = minimax(board, kDepth - 1, -kInf, kInf, oppColor, false, color);
+        int val = minimax(board, kDepth - 1, -kInf, kInf, opp, false, color);
         board.set(m.r, m.c, ChessType::None);
-        scored.push_back({ mapMinimaxTo750(val), m.r, m.c });
+        int s = crit1(board, m.r, m.c, opp) + crit4_mix(board, m.r, m.c, color, opp, val);
+        scored.push_back({s, m.r, m.c});
     }
+    if (!must.empty()) return pickBestNoRandom(scored);
     return pickBestMove(scored);
 }
 

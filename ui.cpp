@@ -112,11 +112,11 @@ void UI::render(const Board& board, Pos hover) {
 }
 
 void UI::messageBox(const wchar_t* text) {
-    MessageBox(GetHWnd(), text, L"游戏结束", MB_OK);
+    MessageBox(GetHWnd(), text, L"Game Over", MB_OK);
 }
 
 int UI::askYesNo(const wchar_t* text) {
-    return MessageBox(GetHWnd(), text, L"游戏结束", MB_YESNO | MB_ICONQUESTION);
+    return MessageBox(GetHWnd(), text, L"Game Over", MB_YESNO | MB_ICONQUESTION);
 }
 
 void UI::loadBackground(const char* path) {
