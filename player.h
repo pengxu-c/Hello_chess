@@ -2,6 +2,8 @@
 // player.h - 棋手类声明
 // 抽象基类 Player，派生：HumanPlayer、EasyJudgeAI、PureGreed10、PureGreed11、MinimaxPP
 // 每个棋手实现 place() 返回落子位置
+// 评分系统：单一评分核 segValue(几何级数梯度,对任意WIN_LEN成立) + 单点核 pointScore(攻防同函数)
+// 各 AI 攻防权重：EasyJudge=防守, PG1.0=防守, PG1.1=防守+0.9*进攻, Minimax++=搜索主导+0.001启发式
 // ============================================================
 #pragma once
 #include "core.h"
