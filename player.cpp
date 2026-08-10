@@ -107,6 +107,40 @@ static Pos findOppOneStepWin(Board& board, ChessType opp) {
     return {-1, -1};
 }
 
+// 对方关键威胁检测：遍历空位模拟对方落子，若在某方向形成
+//   活(WIN_LEN-1)连(活四,两端开放) 或 活(WIN_LEN-2)连(活三,两端开放)
+// 则该位置是必防点。活四:对方下一步任一端成n,必须立即堵此点本身。
+// 活三:对方下一步任一端成活四(双威胁),必须立即堵此点本身或活三端点。
+// 返回所有此类威胁位置作为精确候选。对任意 WIN_LEN>=3 成立。
+// 解决旧 findMustDefend 不区分活/眠且不检测活 n-2 的缺陷。
+static std::vector<Pos> findOppCriticalThreats(Board& board, ChessType opp) {
+    std::vector<Pos> res;
+    int dr[] = {0, 1, 1, 1}, dc[] = {1, 0, 1, -1};
+    // 威胁阈值: WIN_LEN>=4 时检测活n-2及以上; WIN_LEN==3 时只检测活n-1(活2连)
+    int threshold = (WIN_LEN >= 4) ? (WIN_LEN - 2) : (WIN_LEN - 1);
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++) {
+            if (board.at(r, c) != ChessType::None) continue;
+            board.set(r, c, opp);
+            bool threat = false;
+            for (int d = 0; d < 4 && !threat; d++) {
+                // 统计经过(r,c)沿方向d的最长连续同色线段
+                int count = 1;
+                int nr = r + dr[d], nc = c + dc[d];
+                while (board.inBounds(nr, nc) && board.at(nr, nc) == opp) { count++; nr += dr[d]; nc += dc[d]; }
+                bool openE = board.inBounds(nr, nc) && board.at(nr, nc) == ChessType::None;
+                int pr = r - dr[d], pc = c - dc[d];
+                while (board.inBounds(pr, pc) && board.at(pr, pc) == opp) { count++; pr -= dr[d]; pc -= dc[d]; }
+                bool openS = board.inBounds(pr, pc) && board.at(pr, pc) == ChessType::None;
+                // 活棋(两端开放)且连数>=阈值且未成连
+                if (openS && openE && count >= threshold && count < WIN_LEN) threat = true;
+            }
+            board.set(r, c, ChessType::None);
+            if (threat) res.push_back({r, c});
+        }
+    return res;
+}
+
 // 必胜类：1步必胜(自己成连) + 2步必胜(下m后>=2个成连点，对方堵一个还有另一个)
 // 所有 AI 在 place() 开头调用，检测到必胜直接返回，保证两步内获胜。
 static Pos findWinMove(Board& board, ChessType color) {
@@ -119,7 +153,8 @@ static Pos findWinMove(Board& board, ChessType color) {
             board.set(r, c, ChessType::None);
             if (win) return {r, c};
         }
-    // 2步必胜：下m后自己有>=2个成连点
+    // 2步必胜：下m后自己有>=2个成连点，且对方无1步成连反制
+    ChessType opp = opponent(color);
     for (int r = 0; r < ROWS; r++)
         for (int c = 0; c < COLS; c++) {
             if (board.at(r, c) != ChessType::None) continue;
@@ -132,8 +167,14 @@ static Pos findWinMove(Board& board, ChessType color) {
                     if (inlineCheckN(board, r2, c2, color, WIN_LEN)) winSpots++;
                     board.set(r2, c2, ChessType::None);
                 }
+            bool realWin = false;
+            if (winSpots >= 2) {
+                // 检查对方是否有1步成连反制（对方下一步直接成连则我方2步必胜不成立）
+                Pos oppCounter = findOppOneStepWin(board, opp);
+                realWin = (oppCounter.r < 0);  // 对方无1步成连反制才是真必胜
+            }
             board.set(r, c, ChessType::None);
-            if (winSpots >= 2) return {r, c};
+            if (realWin) return {r, c};
         }
     return {-1, -1};
 }
@@ -206,6 +247,13 @@ Pos EasyJudgeAI::place(Board& board, ChessType color) {
     if (win.r >= 0) return win;
     Pos oppWin = findOppOneStepWin(board, opp);
     if (oppWin.r >= 0) return oppWin;
+    // 对方活n-1/活n-2威胁: 精确候选为威胁位置, 用大maxCap区分威胁等级
+    auto critical = findOppCriticalThreats(board, opp);
+    if (!critical.empty()) {
+        std::vector<ScoredMove> cs;
+        for (auto& m : critical) cs.push_back({pointScore(board, m.r, m.c, opp, 1000000), m.r, m.c});
+        return pickBestNoRandom(cs);
+    }
     auto must = findMustDefend(board, opp);
     std::vector<ScoredMove> scored;
     if (!must.empty()) {
@@ -229,6 +277,12 @@ Pos PureGreed10::place(Board& board, ChessType color) {
     if (win.r >= 0) return win;
     Pos oppWin = findOppOneStepWin(board, opp);
     if (oppWin.r >= 0) return oppWin;
+    auto critical = findOppCriticalThreats(board, opp);
+    if (!critical.empty()) {
+        std::vector<ScoredMove> cs;
+        for (auto& m : critical) cs.push_back({pointScore(board, m.r, m.c, opp, 1000000), m.r, m.c});
+        return pickBestNoRandom(cs);
+    }
     auto must = findMustDefend(board, opp);
     std::vector<ScoredMove> scored;
     if (!must.empty()) {
@@ -252,6 +306,15 @@ Pos PureGreed11::place(Board& board, ChessType color) {
     if (win.r >= 0) return win;
     Pos oppWin = findOppOneStepWin(board, opp);
     if (oppWin.r >= 0) return oppWin;
+    auto critical = findOppCriticalThreats(board, opp);
+    if (!critical.empty()) {
+        std::vector<ScoredMove> cs;
+        for (auto& m : critical) {
+            int s = pointScore(board, m.r, m.c, opp, 1000000) + (pointScore(board, m.r, m.c, color, 1000000) * 9 / 10);
+            cs.push_back({s, m.r, m.c});
+        }
+        return pickBestNoRandom(cs);
+    }
     auto must = findMustDefend(board, opp);
     std::vector<ScoredMove> scored;
     if (!must.empty()) {
@@ -282,7 +345,7 @@ MinimaxPP::MinimaxPP(Judge& judge) : judge_(judge) {}
 //     count>=WIN_LEN          -> 1,000,000 (已成连)
 //     open==0(死棋)           -> 0          (无威胁)
 //     diff=WIN_LEN-count:
-//       diff==1 (活四/冲四)   -> 活 200,000 / 眠 20,000
+//       diff==1 (活四/冲四)   -> 活 200,000 / 眠 50,000
 //       diff==2 (活三/眠三)   -> 活  20,000 / 眠  2,000
 //       diff==3 (活二/眠二)   -> 活   2,000 / 眠    200
 //       diff==4 (活一/眠一)   -> 活     200 / 眠     20
@@ -322,7 +385,7 @@ int MinimaxPP::evaluate(const Board& board, ChessType aiColor) const {
                     int diff = WIN_LEN - count;
                     bool live = (openEnds == 2);
                     switch (diff) {
-                        case 1: segScore = live ? 200000 : 20000; break;
+                        case 1: segScore = live ? 200000 : 50000; break;
                         case 2: segScore = live ?  20000 :  2000; break;
                         case 3: segScore = live ?   2000 :   200; break;
                         case 4: segScore = live ?    200 :    20; break;
@@ -426,9 +489,11 @@ Pos MinimaxPP::place(Board& board, ChessType color) {
     auto moves = generateMoves(board);
     if (moves.empty()) return { -1, -1 };
 
-    // 1) 禁用机制：对方有活 (WIN_LEN-2) 连及以上 → 只在必防位置中精确选（不随机）
+    // 0.7) 对方活n-1/活n-2威胁: 精确候选为威胁位置(优先级高于 must)
+    auto critical = findOppCriticalThreats(board, opp);
+    // 1) 禁用机制: 对方活(WIN_LEN-2)连及以上 → 只在必防位置中精确选
     auto must = findMustDefend(board, opp);
-    const auto& cands = must.empty() ? moves : must;
+    const auto& cands = !critical.empty() ? critical : (must.empty() ? moves : must);
 
     // 2) 搜索主导 + 启发式打破平局
     std::vector<ScoredMove> scored;
