@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
+#include <random>
 
 // ==================== 单一评分核 + 单点核 + 必胜类 + 禁用机制 + 选择器 ====================
 //
@@ -339,21 +340,12 @@ const char* PureGreed11::name() const { return "PureGreed 1.1"; }
 MinimaxPP::MinimaxPP(Judge& judge) : judge_(judge) {}
 
 // 局面评估：沿 4 方向扫描所有"连续同色线段"，按线段长度与两端开放数评分。
-// 相比旧版"窗口计数"，本版本能区分活棋(两端开放)/眠棋(一端开放)/死棋(两端封堵)，
-// 避免把 "X.X.X" 与 "XXX.." 评成等价，从而正确反映连续威胁。
-//   评分表(连续数 count, 开放端数 open):
-//     count>=WIN_LEN          -> 1,000,000 (已成连)
-//     open==0(死棋)           -> 0          (无威胁)
-//     diff=WIN_LEN-count:
-//       diff==1 (活四/冲四)   -> 活 200,000 / 眠 50,000
-//       diff==2 (活三/眠三)   -> 活  20,000 / 眠  2,000
-//       diff==3 (活二/眠二)   -> 活   2,000 / 眠    200
-//       diff==4 (活一/眠一)   -> 活     200 / 眠     20
-//       diff>=5               -> 活      20 / 眠      2
+// 统一调用 segValue 评分核，与 pointScore 使用同一张评分表，消除量纲不一致。
+//   评分表见 segValue：count>=WIN_LEN→1,000,000；open==0→0；活棋=base，眠棋=base/10
+//   己方线段加分，对方线段减分。
 int MinimaxPP::evaluate(const Board& board, ChessType aiColor) const {
     int dr[] = { 0, 1, 1, 1 };
     int dc[] = { 1, 0, 1, -1 };
-    ChessType oppColor = opponent(aiColor);
     int score = 0;
     for (int d = 0; d < 4; d++) {
         for (int r = 0; r < ROWS; r++) {
@@ -375,23 +367,8 @@ int MinimaxPP::evaluate(const Board& board, ChessType aiColor) const {
                 bool openStart = board.inBounds(pr, pc) && board.at(pr, pc) == ChessType::None;
                 bool openEnd   = board.inBounds(nr, nc) && board.at(nr, nc) == ChessType::None;
                 int openEnds = (openStart ? 1 : 0) + (openEnd ? 1 : 0);
-                // 按连续长度与开放端数查表评分
-                int segScore;
-                if (count >= WIN_LEN) {
-                    segScore = 1000000;
-                } else if (openEnds == 0) {
-                    segScore = 0;                       // 两端封堵，不可能成连，无威胁
-                } else {
-                    int diff = WIN_LEN - count;
-                    bool live = (openEnds == 2);
-                    switch (diff) {
-                        case 1: segScore = live ? 200000 : 50000; break;
-                        case 2: segScore = live ?  20000 :  2000; break;
-                        case 3: segScore = live ?   2000 :   200; break;
-                        case 4: segScore = live ?    200 :    20; break;
-                        default: segScore = live ?     20 :     2; break;
-                    }
-                }
+                // 统一评分核（与 pointScore 同表）
+                int segScore = segValue(count, openEnds);
                 // 己方线段加分，对方线段减分
                 if (cur == aiColor) score += segScore;
                 else                score -= segScore;
@@ -402,7 +379,8 @@ int MinimaxPP::evaluate(const Board& board, ChessType aiColor) const {
 }
 
 // 生成候选着法：棋盘空时返回中心；否则收集已有棋子周围 kRadius 内的空位。
-// 用 nearby 二维布尔数组去重，避免同一空位被多个棋子的邻域重复加入。
+// 用静态布尔数组去重，避免递归中堆分配（性能关键）。
+// static 缓冲安全：generateMoves 不递归，返回 vector 后缓冲可被内层重用。
 std::vector<Pos> MinimaxPP::generateMoves(const Board& board) const {
     std::vector<Pos> moves;
     bool hasAny = false;
@@ -410,7 +388,10 @@ std::vector<Pos> MinimaxPP::generateMoves(const Board& board) const {
         for (int c = 0; c < COLS; c++)
             if (board.at(r, c) != ChessType::None) { hasAny = true; break; }
     if (!hasAny) { moves.push_back({ ROWS / 2, COLS / 2 }); return moves; }
-    std::vector<std::vector<bool>> nearby(ROWS, std::vector<bool>(COLS, false));
+    static bool nearby[kMaxBoard][kMaxBoard];          // 静态缓冲，避免每次递归堆分配
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            nearby[r][c] = false;
     for (int r = 0; r < ROWS; r++) {
         for (int c = 0; c < COLS; c++) {
             if (board.at(r, c) == ChessType::None) continue;
@@ -429,54 +410,118 @@ std::vector<Pos> MinimaxPP::generateMoves(const Board& board) const {
     return moves;
 }
 
-// alpha-beta 递归搜索。
+// 初始化 Zobrist 随机数表（固定种子保证可复现）
+void MinimaxPP::initZobrist() {
+    std::mt19937_64 rng(0x123456789ABCDEFULL);
+    for (int r = 0; r < kMaxBoard; r++)
+        for (int c = 0; c < kMaxBoard; c++)
+            for (int k = 0; k < 2; k++)
+                zobrist_[r][c][k] = rng();
+}
+
+// 计算当前棋盘的 Zobrist 哈希
+uint64_t MinimaxPP::boardHash(const Board& board) const {
+    uint64_t h = 0;
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++) {
+            ChessType t = board.at(r, c);
+            if (t == ChessType::Black)      h ^= zobrist_[r][c][0];
+            else if (t == ChessType::White) h ^= zobrist_[r][c][1];
+        }
+    return h;
+}
+
+// alpha-beta 递归搜索 + 启发式排序 + Zobrist 置换表。
 //   isMax=true  → AI 方回合(最大化)，落 curColor(=aiColor)，胜则返回 +kInf-(kDepth-depth)
 //   isMax=false → 对方回合(最小化)，落 curColor(=opp)，  胜则返回 -kInf+(kDepth-depth)
 // 胜负距离加权：越浅层获胜分越多，促使 AI 优先选择最快取胜/最迟告负的路径。
+// hash 为当前局面 Zobrist 哈希，落子时异或更新，O(1) 维护。
 int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
-                       ChessType curColor, bool isMax, ChessType aiColor) {
+                       ChessType curColor, bool isMax, ChessType aiColor, uint64_t hash) {
+    // 置换表查询
+    auto it = transTable_.find(hash);
+    if (it != transTable_.end() && it->second.depth >= depth) {
+        int v = it->second.value, f = it->second.flag;
+        if (f == 0) return v;                       // exact
+        if (f == 1 && v > alpha) alpha = v;         // lower bound
+        if (f == 2 && v < beta)  beta  = v;         // upper bound
+        if (alpha >= beta) return v;
+    }
+
     if (depth == 0) return evaluate(board, aiColor);          // 叶子节点：静态评估
     auto moves = generateMoves(board);
     if (moves.empty()) return evaluate(board, aiColor);       // 无候选着法：静态评估
+
+    // 启发式排序：按 pointScore 降序，优先搜索高分节点，大幅提升剪枝效率
+    ChessType oppColor = opponent(curColor);
+    std::vector<ScoredMove> sortedMoves;
+    sortedMoves.reserve(moves.size());
+    for (const auto& m : moves) {
+        int s = pointScore(board, m.r, m.c, curColor, 1000000) + pointScore(board, m.r, m.c, oppColor, 1000000);
+        sortedMoves.push_back({s, m.r, m.c});
+    }
+    std::sort(sortedMoves.begin(), sortedMoves.end(),
+              [](const ScoredMove& a, const ScoredMove& b) { return a.score > b.score; });
+
+    int origAlpha = alpha, origBeta = beta;
+
     if (isMax) {
         int best = -kInf;
-        for (const auto& m : moves) {
+        bool terminal = false;
+        for (const auto& m : sortedMoves) {
+            int colorIdx = (curColor == ChessType::Black) ? 0 : 1;
+            uint64_t newHash = hash ^ zobrist_[m.r][m.c][colorIdx];
             board.set(m.r, m.c, curColor);
-            if (judge_.checkWin(board, m, curColor, WIN_LEN)) {
+            if (judge_.checkWin(board, {m.r, m.c}, curColor, WIN_LEN)) {
                 board.set(m.r, m.c, ChessType::None);
-                return kInf - (kDepth - depth);   // AI 获胜，越浅赢越好
+                best = kInf - (kDepth - depth);     // AI 获胜，越浅赢越好
+                terminal = true;
+                break;
             }
-            int val = minimax(board, depth - 1, alpha, beta, opponent(curColor), false, aiColor);
+            int val = minimax(board, depth - 1, alpha, beta, oppColor, false, aiColor, newHash);
             board.set(m.r, m.c, ChessType::None);
             if (val > best) best = val;
             if (best > alpha) alpha = best;
-            if (alpha >= beta) break;             // β 剪枝
+            if (alpha >= beta) break;               // β 剪枝
         }
+        int flag = terminal ? 0 : (best <= origAlpha ? 2 : (best >= origBeta ? 1 : 0));
+        transTable_[hash] = {depth, best, flag};
         return best;
     } else {
         int best = kInf;
-        for (const auto& m : moves) {
+        bool terminal = false;
+        for (const auto& m : sortedMoves) {
+            int colorIdx = (curColor == ChessType::Black) ? 0 : 1;
+            uint64_t newHash = hash ^ zobrist_[m.r][m.c][colorIdx];
             board.set(m.r, m.c, curColor);
-            if (judge_.checkWin(board, m, curColor, WIN_LEN)) {
+            if (judge_.checkWin(board, {m.r, m.c}, curColor, WIN_LEN)) {
                 board.set(m.r, m.c, ChessType::None);
-                return -kInf + (kDepth - depth);  // 对方获胜，越浅输越糟
+                best = -kInf + (kDepth - depth);    // 对方获胜，越浅输越糟
+                terminal = true;
+                break;
             }
-            int val = minimax(board, depth - 1, alpha, beta, opponent(curColor), true, aiColor);
+            int val = minimax(board, depth - 1, alpha, beta, oppColor, true, aiColor, newHash);
             board.set(m.r, m.c, ChessType::None);
             if (val < best) best = val;
             if (best < beta) beta = best;
-            if (alpha >= beta) break;             // α 剪枝
+            if (alpha >= beta) break;               // α 剪枝
         }
+        int flag = terminal ? 0 : (best <= origAlpha ? 2 : (best >= origBeta ? 1 : 0));
+        transTable_[hash] = {depth, best, flag};
         return best;
     }
 }
 
-// 顶层决策：必胜类 → 对方一步成连 → 禁用机制 → 搜索主导 + 启发式打破平局
+// 顶层决策：必胜类 → 对方一步成连 → 合并防守候选(取并集) → 搜索主导 + 启发式打破平局
 //   评分 = minimax_val(±kInf=±1e8) + (pointScore(me,1e6) + pointScore(opp,1e6)) / 1000
-//   搜索主导：minimax_val(±1e8) 占绝对主导，启发式项(/1000，最大约1100)仅在搜索分不出高低时打破平局；
-//   终局附近启发式占比<0.01%，非终局弱局面占比≤10-20%。
+//   搜索主导：minimax_val(±1e8) 占绝对主导，启发式项(/1000)仅在搜索分不出高低时打破平局。
+// 防守候选合并：critical(活三/活四威胁) ∪ must(眠四/冲四必防) 取并集，
+//   修复旧版"互斥选择"导致同时存在活三与眠四时只防活三、被眠四连五杀的致命漏洞。
 Pos MinimaxPP::place(Board& board, ChessType color) {
     ChessType opp = opponent(color);
+
+    if (!zobristInited_) { initZobrist(); zobristInited_ = true; }
+    transTable_.clear();                                    // 每次顶层决策重置置换表
 
     // 0) 必胜类：1步或2步必胜
     Pos win = findWinMove(board, color);
@@ -489,22 +534,32 @@ Pos MinimaxPP::place(Board& board, ChessType color) {
     auto moves = generateMoves(board);
     if (moves.empty()) return { -1, -1 };
 
-    // 0.7) 对方活n-1/活n-2威胁: 精确候选为威胁位置(优先级高于 must)
+    // 0.7) 合并防守候选：活三/活四威胁(critical) + 眠四/冲四必防(must)，取并集去重
     auto critical = findOppCriticalThreats(board, opp);
-    // 1) 禁用机制: 对方活(WIN_LEN-2)连及以上 → 只在必防位置中精确选
     auto must = findMustDefend(board, opp);
-    const auto& cands = !critical.empty() ? critical : (must.empty() ? moves : must);
+    std::vector<Pos> defenseMoves;
+    {
+        static bool seen[kMaxBoard][kMaxBoard];
+        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) seen[r][c] = false;
+        for (auto& p : critical) if (!seen[p.r][p.c]) { seen[p.r][p.c] = true; defenseMoves.push_back(p); }
+        for (auto& p : must)     if (!seen[p.r][p.c]) { seen[p.r][p.c] = true; defenseMoves.push_back(p); }
+    }
+    const auto& cands = !defenseMoves.empty() ? defenseMoves : moves;
 
-    // 2) 搜索主导 + 启发式打破平局
+    // 1) 搜索主导 + 启发式打破平局
+    uint64_t baseHash = boardHash(board);
+    int colorIdxMe = (color == ChessType::Black) ? 0 : 1;
     std::vector<ScoredMove> scored;
+    scored.reserve(cands.size());
     for (const auto& m : cands) {
+        uint64_t newHash = baseHash ^ zobrist_[m.r][m.c][colorIdxMe];
         board.set(m.r, m.c, color);
-        int val = minimax(board, kDepth - 1, -kInf, kInf, opp, false, color);
+        int val = minimax(board, kDepth - 1, -kInf, kInf, opp, false, color, newHash);
         board.set(m.r, m.c, ChessType::None);
         int s = val + (pointScore(board, m.r, m.c, color, 1000000) + pointScore(board, m.r, m.c, opp, 1000000)) / 1000;
         scored.push_back({s, m.r, m.c});
     }
-    if (!must.empty()) return pickBestNoRandom(scored);
+    if (!defenseMoves.empty()) return pickBestNoRandom(scored);
     return pickBestMove(scored);
 }
 
