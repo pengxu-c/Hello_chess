@@ -1,9 +1,10 @@
 // ============================================================
 // controller.h - 游戏控制器类声明
-// 组合 Board/Judge/Stats/UI/Player，主导游戏流程
+// 组合 Board/Judge/Stats/UI/Player/StorageManager，主导游戏流程
 // ============================================================
 #pragma once
 #include "core.h"
+#include "storage.h"
 
 class UI;
 class Player;
@@ -16,14 +17,21 @@ public:
 private:
     int boardSize_ = 15;        // 棋盘尺寸 N（N×N）
     int winLength_ = 5;         // 连珠获胜数 n
+    int p1Type_ = 1;            // 玩家1类型编号
+    int p2Type_ = 1;            // 玩家2类型编号
     Board board_;
     Judge judge_;
     Stats stats_;
     UI* ui_ = nullptr;
     Player* player1_ = nullptr; // 执黑先手
     Player* player2_ = nullptr; // 执白后手
+    StorageManager storage_;    // 存储管理器
+
     Player* createPlayer(int choice);   // 按编号创建棋手
-    void configureRules();              // 终端配置棋盘尺寸与连珠数（输入 c 触发，否则默认）
+    void configureRules();              // 终端配置棋盘尺寸与连珠数 + 存储开关
     void selectPlayers();               // 终端选择双方棋手
     void playOneGame();                 // 进行一局对战
+    void applyBoardLayout();            // 按 boardSize_ 计算网格像素与偏移
+    bool loadResumeMenu();              // 残棋载入菜单
+    void replayMenu();                  // 棋局回访菜单
 };

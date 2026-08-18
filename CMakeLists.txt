@@ -29,6 +29,7 @@ set(SOURCE_FILES
     ui.cpp
     player.cpp
     controller.cpp
+    storage.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})

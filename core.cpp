@@ -117,7 +117,3 @@ int Stats::count(ChessType color) const {
     return 0;
 }
 
-void Stats::printProgress() const {
-    system("cls");
-    printf("Current black move count: %d\n", black_);
-}

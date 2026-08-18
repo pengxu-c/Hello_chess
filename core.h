@@ -61,7 +61,7 @@ public:
     void reset();                       // 清零计数
     void recordMove(ChessType color);   // 记录一步落子
     int count(ChessType color) const;   // 查询某方步数
-    void printProgress() const;         // 打印当前进度
+
 private:
     int black_ = 0;   // 黑棋步数
     int white_ = 0;   // 白棋步数
