@@ -201,8 +201,7 @@ void GameController::replayMenu() {
     board_.resize();
 
     ui_->initWindow(960, 600);
-    ui_->loadBackground("Resource/images/bk.jpg");
-    system("cls");
+
 
     int step = 0;
     int total = (int)record.moves.size();
@@ -347,8 +346,7 @@ void GameController::run() {
         }
 
         ui_->initWindow(960, 600);
-        ui_->loadBackground("Resource/images/bk.jpg");
-        system("cls");
+
 
         if (resumeLoaded) {
             // 残局已恢复到 board_，渲染初始状态

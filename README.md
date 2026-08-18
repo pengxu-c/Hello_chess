@@ -169,6 +169,8 @@ chess/
 - `C:/EasyX/include`
 
 若你的 EasyX 安装在其他位置，可在仓库根目录创建 `cmake-local.cmake`（该文件已被 `.gitignore` 忽略，不会提交）：
+libpng warning: iCCP: known incorrect sRGB profile如果出现这样的警告，可以忽略，不影响功能。
+
 
 ```cmake
 set(EASYX_LOCAL_PATH "D:/your/path/to/EasyX")
@@ -183,9 +185,6 @@ cmake --build build --config Release
 
 构建产物为 `build/Release/Hello_chess.exe`。
 
-### 背景图（可选）
-
-程序运行时会检测 `Resource/images/bk.jpg`，若存在则作为背景加载，否则使用默认浅棕色背景。该资源目录不包含在仓库中，可按需自行放置。
 
 ## 快速上手
 
@@ -238,7 +237,7 @@ place():
 
 - 仅支持 Windows，目前未做跨平台适配。
 - EasyJudge / PureGreed 系列为启发式评分；Minimax++ 采用 alpha-beta 剪枝搜索（深度 4、半径 2，可在 `player.h` 顶部 `constexpr` 调整），复杂局面下仍可能非最优。
-- 棋盘背景图路径写死为相对路径，需从工作目录正确启动方可加载。
+
 - 评估函数为全盘扫描（O(N²)），未做增量评估；置换表在每次顶层决策时清空。
 - 控制台命令需用户点击控制台窗口方可输入（Windows GUI 程序特性）。
 

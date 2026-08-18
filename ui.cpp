@@ -2,8 +2,6 @@
 // ui.cpp - UI 类实现（EasyX 图形库封装）
 // ============================================================
 #include "ui.h"
-#include <cstdio>
-#include <io.h>
 #include <cmath>
 
 UI::UI() {}
@@ -11,6 +9,7 @@ UI::~UI() {}
 
 void UI::initWindow(int w, int h) {
     initgraph(w, h, EX_SHOWCONSOLE);
+
 }
 
 void UI::close() {
@@ -96,15 +95,11 @@ void UI::drawHover(Pos hover) {
     }
 }
 
-// 渲染一帧：背景 → 网格 → 棋子 → 提示圈
+// 渲染一帧：背景色 → 网格 → 棋子 → 提示圈
 void UI::render(const Board& board, Pos hover) {
     BeginBatchDraw();
-    if (hasBg_) {
-        putimage(0, 0, &imgBg_);
-    } else {
-        setbkcolor(RGB(240, 220, 180));
-        cleardevice();
-    }
+    setbkcolor(RGB(240, 220, 180));
+    cleardevice();
     drawGrid();
     drawPieces(board);
     drawHover(hover);
@@ -118,12 +113,3 @@ void UI::messageBox(const wchar_t* text) {
 int UI::askYesNo(const wchar_t* text) {
     return MessageBox(GetHWnd(), text, L"Game Over", MB_YESNO | MB_ICONQUESTION);
 }
-
-void UI::loadBackground(const char* path) {
-    if (_access(path, 0) == 0) {
-        loadimage(&imgBg_, L"Resource/images/bk.jpg");
-        hasBg_ = true;
-    }
-}
-
-bool UI::hasBackground() const { return hasBg_; }
