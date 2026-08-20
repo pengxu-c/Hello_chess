@@ -1,4 +1,4 @@
-# ========== 隐私 / 本地路径（最重要）==========
+# ========== 本地路径（最重要）==========
 cmake-local.cmake
 CMakeCache.txt
 CMakeFiles/
@@ -7,6 +7,8 @@ compile_commands.json
 *.user
 *.suo
 .env
+# ========== 运行时数据（存储模块生成）==========
+data/
 
 # ========== CMake 构建目录 ==========
 build/
