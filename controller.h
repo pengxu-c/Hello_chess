@@ -5,6 +5,7 @@
 #pragma once
 #include "core.h"
 #include "storage.h"
+#include "ai_config.h"
 
 class UI;
 class Player;
@@ -26,6 +27,7 @@ private:
     Player* player1_ = nullptr; // 执黑先手
     Player* player2_ = nullptr; // 执白后手
     StorageManager storage_;    // 存储管理器
+    AIConfig aiConfig_;          // API AI 配置
 
     Player* createPlayer(int choice);   // 按编号创建棋手
     void configureRules();              // 终端配置棋盘尺寸与连珠数 + 存储开关

@@ -1,6 +1,6 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15)
 project(Hello_chess)
-
+set(X_VCPKG_APPLOCAL_DEPS_INSTALL ON)
 set(CMAKE_CXX_STANDARD 17)
 if(MSVC)
     add_compile_options(/utf-8)
@@ -28,6 +28,8 @@ set(SOURCE_FILES
     core.cpp
     ui.cpp
     player.cpp
+    ai_config.cpp
+    ai_player.cpp
     controller.cpp
     storage.cpp
 )
@@ -43,10 +45,21 @@ target_link_directories(${PROJECT_NAME} PRIVATE
     "C:/EasyX/lib/x64"
 )
 
-# ========== 只链系统库，不手动链 EasyX ==========
-target_link_libraries(${PROJECT_NAME}
-    gdi32 ole32 oleaut32 winmm msimg32
-)
-
 # ========== UNICODE ==========
 target_compile_definitions(${PROJECT_NAME} PRIVATE UNICODE _UNICODE)
+
+# ========== vcpkg 库查找 ==========
+list(APPEND CMAKE_PREFIX_PATH "D:/SOFT/vcpkg/installed/x64-windows")
+find_package(CURL CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+
+# ========== 链接所有库（系统库 + vcpkg 库） ==========
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    gdi32
+    ole32
+    oleaut32
+    winmm
+    msimg32
+    CURL::libcurl
+    nlohmann_json::nlohmann_json
+)

@@ -1,0 +1,13 @@
+{
+  "ai_player": {
+    "display_name": "",
+    "provider": "openai",
+    "api_url": "",
+    "api_key": "",
+    "model": "",
+    "temperature": 0.3,
+    "max_tokens": 100,
+    "system_prompt": "You are a Gomoku AI. Board is {size}x{size}, play as {color}. Win by {win_len} in a row. Respond ONLY with the coordinates: row,col. Coordinates are 0-indexed.",
+    "user_prompt_template": "Board (B=Black W=White .=Empty):\n{board}\nYour move as {color}:"
+  }
+}

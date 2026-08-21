@@ -6,6 +6,7 @@
 #include "controller.h"
 #include "ui.h"
 #include "player.h"
+#include "ai_player.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +18,7 @@
 GameController::GameController() {
     ui_ = new UI();
     srand((unsigned int)time(NULL));
+    aiConfig_.loadFromFile();
 }
 
 GameController::~GameController() {
@@ -33,6 +35,11 @@ Player* GameController::createPlayer(int choice) {
         case 3: return new PureGreed10();
         case 4: return new PureGreed11();
         case 5: return new MinimaxPP(judge_);
+        case 6:
+            // API 未配置或配置不完整时，自动回退到 Minimax++（玩家5）
+            if (aiConfig_.enabled) return new APIPlayer(aiConfig_);
+            printf(">> API AI unavailable (config.json missing or incomplete). Falling back to Minimax++.\n");
+            return new MinimaxPP(judge_);
         default: return new HumanPlayer(*ui_);
     }
 }
@@ -99,7 +106,12 @@ void GameController::selectPlayers() {
     printf("  2. EasyJudge (super easy: random + block)\n");
     printf("  3. PureGreed 1.0 (defense-only scoring)\n");
     printf("  4. PureGreed 1.1 (attack+defense scoring)\n");
-    printf("  5. Minimax++ (alpha-beta search)\n\n");
+    printf("  5. Minimax++ (alpha-beta search)\n");
+    if (aiConfig_.enabled)
+        printf("  6. API AI - %s (remote LLM)\n", aiConfig_.displayName.c_str());
+    else
+        printf("  6. API AI (unavailable; falls back to Minimax++)\n");
+    printf("\n");
 
     int c1 = 0, c2 = 0;
     char buf2[64];

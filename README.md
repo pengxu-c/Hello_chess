@@ -25,6 +25,7 @@
 | 3 | PureGreed 1.0 | 纯防守评分 |
 | 4 | PureGreed 1.1 | 攻防评分 |
 | 5 | Minimax++ | alpha-beta 剪枝 + 启发式排序 + Zobrist 置换表（最强） |
+| 6 | API AI | 远程大模型 API 玩家（需配置 `config.json`） |
 
 任意双方可自由组合，**支持 AI 对 AI**（如玩家1 选 Minimax++，玩家2 选 EasyJudge，即可观战 AI 互弈）。输入非数字或越界时默认为人类玩家。
 
@@ -103,6 +104,8 @@ moveCount=59
 | | `PureGreed10` | 防守 AI，派生自 Player |
 | | `PureGreed11` | 攻防 AI，派生自 Player |
 | | `MinimaxPP` | alpha-beta 搜索 AI，派生自 Player |
+| | `APIPlayer` | 远程大模型 API AI，派生自 Player |
+| `ai_config.h/.cpp` | `AIConfig` | API AI 配置加载（JSON 驱动） |
 | `storage.h/.cpp` | `StorageManager` | **棋局存储管理**：悔棋、回访、残局、统计、控制台命令 |
 | `controller.h/.cpp` | `GameController` | 主循环、规则配置、终端选玩家、回合调度、存储集成 |
 | `main.cpp` | — | 仅构造控制器并 `run()` |
@@ -110,7 +113,7 @@ moveCount=59
 ### 类关系
 
 - `Judge` 是 `Board` 的**友元**，直接读取棋盘内部数据判定连珠。
-- `Player` 为抽象基类，四个棋手**派生**自它，统一 `place()` 接口。
+- `Player` 为抽象基类，五个棋手**派生**自它，统一 `place()` 接口。
 - `HumanPlayer` 持有 `UI&` 引用获取鼠标输入；`EasyJudgeAI` 持有 `Judge&`、`Stats&` 引用。
 - `GameController` **组合** `Board`/`Judge`/`Stats`/`StorageManager`（值语义）与 `UI*`、两个 `Player*`（堆，析构释放）。
 - `StorageManager` 独立管理数据持久化，通过 `StorageConfig` 配置驱动，文件格式 `key=value` 可扩展。
@@ -131,7 +134,9 @@ moveCount=59
 chess/
 ├── core.h / core.cpp              Board, Judge, Stats, Pos, ChessType
 ├── ui.h / ui.cpp                  UI（EasyX 封装）
-├── player.h / player.cpp          Player 基类 + 4 个派生棋手
+├── player.h / player.cpp          Player 基类 + 5 个派生棋手
+├── ai_config.h / ai_config.cpp    AIConfig（API AI JSON 配置加载）
+├── ai_player.h / ai_player.cpp    APIPlayer（远程大模型 API 玩家）
 ├── storage.h / storage.cpp        StorageManager（悔棋/回访/残局/统计/命令）
 ├── controller.h / controller.cpp  GameController（规则配置 + 回合调度 + 存储集成）
 ├── main.cpp                       程序入口
@@ -149,7 +154,7 @@ chess/
 
 - 操作系统：Windows
 - 编译器：支持 C++17 的 MSVC
-- 构建工具：CMake ≥ 3.10
+- 构建工具：CMake ≥ 3.15
 - 图形库：EasyX（需提前安装）
 
 ### 配置 EasyX 路径（可选）
@@ -182,7 +187,7 @@ cmake --build build --config Release
 1. 运行 `Hello_chess.exe`
 2. 配置规则：直接回车使用默认 15×15 五子棋，或输入 `c` 自定义
 3. 启用存储：输入 `y` 开启记忆存储（或 `n` 关闭）
-4. 选择双方棋手类型（1-5）
+4. 选择双方棋手类型（1-6）
 5. 开始对弈：
    - 人类玩家鼠标点击落子
    - 存储开启时，可随时在控制台输入命令（`help` 查看所有命令）
@@ -224,6 +229,29 @@ place():
 
 ---
 
+## API AI 玩家（远程大模型）
+
+编号 6 的 API AI 玩家通过 HTTP API 调用远程大语言模型落子，支持任意 OpenAI 兼容接口。**若未配置或配置错误，选择编号 6 时自动回退为 Minimax++（玩家5）**，并在控制台提示原因，不会导致程序异常。
+
+### 配置说明
+
+`config.json` 为**开箱即用模板**：提示词、温度等均已配好，**只需补填 `api_url`、`api_key`、`model`**（`display_name` 留空时自动显示模型名）。不预置任何提供商地址，未绑定任何一家。`config.example.json` 提供了以 OpenAI 为例的完整示例供对照参考。
+
+
+| 字段 | 说明 |
+|:-----|:-----|
+| `display_name` | 控制台显示的模型名称（留空则回退为 `model`） |
+| `api_url` | API 端点地址（支持 OpenAI 兼容格式），**必填、未预填**，按下方列表选填 |
+| `api_key` | API 密钥，必填（模板中留空，需自行填写） |
+| `model` | 模型名称，必填；切换模型只改这一行 |
+| `temperature` | 生成温度（0.0-2.0） |
+| `max_tokens` | 最大输出 token 数 |
+| `system_prompt` | 系统提示词，支持 `{size}` `{win_len}` `{color}` 变量 |
+| `user_prompt_template` | 用户提示模板，支持 `{board}` `{color}` 变量 |
+
+> **注意**：`config.json` 包含 API 密钥，已被 `.gitignore` 忽略，不会提交到版本库；`config.example.json` 无敏感信息，随仓库提交仅供格式参考。
+
+
 ## 已知限制
 
 - 仅支持 Windows，目前未做跨平台适配。
@@ -234,6 +262,12 @@ place():
 
 ## 致谢
 
-特别感谢 **EasyX** 图形库，本项目的全部图形绘制与交互实现均建立在它之上。
+本项目的开发离不开以下开源库的支持：
+
+- **EasyX** 图形库：本项目的全部图形绘制与交互实现均建立在它之上。
+- **libcurl**：API AI 玩家的网络请求实现。
+- **nlohmann/json**：配置解析与 API 响应的 JSON 处理。
 
 - EasyX 官网：<https://easyx.cn>
+- libcurl 官网：<https://curl.se>
+- nlohmann/json：<https://github.com/nlohmann/json>
