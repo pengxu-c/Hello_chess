@@ -31,9 +31,9 @@ GameController::~GameController() {
 Player* GameController::createPlayer(int choice) {
     switch (choice) {
         case 1: return new HumanPlayer(*ui_);
-        case 2: return new EasyJudgeAI(judge_, stats_);
-        case 3: return new PureGreed10();
-        case 4: return new PureGreed11();
+        case 2: return new GreedyScoringAI(0.0, "EasyJudge");         // 纯防守
+        case 3: return new GreedyScoringAI(0.0, "PureGreed 1.0");     // 纯防守
+        case 4: return new GreedyScoringAI(0.9, "PureGreed 1.1");     // 攻防
         case 5: return new MinimaxPP(judge_);
         case 6:
             // API 未配置或配置不完整时，自动回退到 Minimax++（玩家5）
@@ -288,6 +288,7 @@ void GameController::playOneGame() {
             } else {
                 // 落子
                 board_.place(pos.r, pos.c, currentColor);
+                current->markLastMove(pos);          // 记录该玩家最后一手（供 UI 闪烁标记）
                 stats_.recordMove(currentColor);
                 storage_.recordMove(pos.r, pos.c, currentColor);
 
@@ -309,7 +310,8 @@ void GameController::playOneGame() {
             }
         }
 
-        ui_->render(board_, ui_->hoverPos());
+        ui_->render(board_, ui_->hoverPos(),      // 传入双方最后一手标记 + 当前回合方
+                    player1_->lastMove(), player2_->lastMove(), currentColor);
     }
 
     // 若游戏仍进行中（如窗口关闭），保存为残局

@@ -1,6 +1,6 @@
 // ============================================================
 // player.h - 棋手类声明
-// 抽象基类 Player，派生：HumanPlayer、EasyJudgeAI、PureGreed10、PureGreed11、MinimaxPP
+// 抽象基类 Player，派生：HumanPlayer、GreedyScoringAI(多档位)、MinimaxPP、APIPlayer
 // 每个棋手实现 place() 返回落子位置
 // 评分系统：单一评分核 segValue(几何级数梯度,对任意WIN_LEN成立) + 单点核 pointScore(攻防同函数)
 // 各 AI 攻防权重：EasyJudge=防守, PG1.0=防守, PG1.1=防守+0.9*进攻, Minimax++=搜索主导+0.001启发式
@@ -10,6 +10,7 @@
 #include "core.h"
 #include <vector>
 #include <unordered_map>
+#include <string>
 #include <cstdint>
 
 class UI;
@@ -25,6 +26,12 @@ public:
     virtual bool isHuman() const = 0;                       // 是否为人类
     virtual bool needsDelay() const { return true; }        // 是否需要思考延迟（AI 默认需要）
     virtual const char* name() const = 0;                   // 棋手名称
+
+    // ---- 最后一手跟踪（供 UI 闪烁标记） ----
+    void markLastMove(const Pos& p) { lastMove_ = p; }      // 记录该玩家最近一手
+    const Pos& lastMove() const { return lastMove_; }       // 查询最近一手（无效表示尚无）
+protected:
+    Pos lastMove_{ -1, -1 };                                // 该玩家最近落子位置
 };
 
 // ---- 人类玩家：从 UI 鼠标点击获取落子 ----
@@ -39,33 +46,17 @@ private:
     UI& ui_;
 };
 
-// ---- EasyJudge：超简单 AI，随机落子 + 防输机制 ----
-class EasyJudgeAI : public Player {
+// ---- 通用评分 AI：单一实现，攻防权重 + 显示名参数化（可扩展任意难度档） ----
+class GreedyScoringAI : public Player {
 public:
-    EasyJudgeAI(Judge& judge, Stats& stats);
+    GreedyScoringAI(double attackWeight, const char* displayName);
     Pos place(Board& board, ChessType color) override;
     bool isHuman() const override;
+    bool needsDelay() const override;
     const char* name() const override;
 private:
-
-    Judge& judge_;
-    Stats& stats_;
-};
-
-// ---- PureGreed 1.0：纯防守评分 AI ----
-class PureGreed10 : public Player {
-public:
-    Pos place(Board& board, ChessType color) override;
-    bool isHuman() const override;
-    const char* name() const override;
-};
-
-// ---- PureGreed 1.1：攻防评分 AI ----
-class PureGreed11 : public Player {
-public:
-    Pos place(Board& board, ChessType color) override;
-    bool isHuman() const override;
-    const char* name() const override;
+    double attackWeight_ = 0.0;     // 进攻权重：0=纯防守，>0 加入进攻考量
+    std::string name_;              // 显示名称（区分各档位）
 };
 
 // ---- Minimax++：极小极大 + alpha-beta 剪枝 + 启发式排序 + Zobrist 置换表 ----

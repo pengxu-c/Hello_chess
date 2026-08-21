@@ -13,6 +13,8 @@
 - 胜利条件：率先在横、竖、斜任一方向上形成 **连续 n 颗同色棋子** 者获胜。
 - 平局：棋盘填满仍无人达成 n 连，判为平局。
 - **自定义规则**：启动时控制台提示 `Customize rules?`，输入 `c` 可设置棋盘尺寸 N（5..30）与连珠数 n（3..N）；直接回车则使用默认 15×15 五子棋。
+- **最后一手标记**：每位玩家最后一次落下的棋子上有对应颜色的外圈标记（黑方黑环、白方白环），一眼看清双方最新一手。
+- **回合指示**：棋盘最左侧（棋盘外）持续显示一枚指示棋子，颜色 = 当前轮到的一方（黑/白），并列有文字标注。
 
 ## 棋手类型
 
@@ -100,9 +102,7 @@ moveCount=59
 | `ui.h/.cpp` | `UI` | **封装全部 EasyX 调用**：窗口、渲染、鼠标、消息框 |
 | `player.h/.cpp` | `Player` | 棋手抽象基类 |
 | | `HumanPlayer` | 人类，派生自 Player |
-| | `EasyJudgeAI` | 超简单 AI，派生自 Player |
-| | `PureGreed10` | 防守 AI，派生自 Player |
-| | `PureGreed11` | 攻防 AI，派生自 Player |
+| | `GreedyScoringAI` | **通用评分 AI**，攻防权重参数化，一次实现覆盖多档难度（0.0 纯防守 / 0.9 攻防） |
 | | `MinimaxPP` | alpha-beta 搜索 AI，派生自 Player |
 | | `APIPlayer` | 远程大模型 API AI，派生自 Player |
 | `ai_config.h/.cpp` | `AIConfig` | API AI 配置加载（JSON 驱动） |
@@ -113,8 +113,8 @@ moveCount=59
 ### 类关系
 
 - `Judge` 是 `Board` 的**友元**，直接读取棋盘内部数据判定连珠。
-- `Player` 为抽象基类，五个棋手**派生**自它，统一 `place()` 接口。
-- `HumanPlayer` 持有 `UI&` 引用获取鼠标输入；`EasyJudgeAI` 持有 `Judge&`、`Stats&` 引用。
+- `Player` 为抽象基类，各棋手**派生**自它，统一 `place()` 接口。
+- `HumanPlayer` 持有 `UI&` 引用获取鼠标输入；`GreedyScoringAI` 通过构造参数（权重/名称）实例化不同难度档，新增档位无需改类。
 - `GameController` **组合** `Board`/`Judge`/`Stats`/`StorageManager`（值语义）与 `UI*`、两个 `Player*`（堆，析构释放）。
 - `StorageManager` 独立管理数据持久化，通过 `StorageConfig` 配置驱动，文件格式 `key=value` 可扩展。
 - EasyX 相关调用集中在 `UI` 类，未来替换图形库只需改此类。
@@ -134,7 +134,7 @@ moveCount=59
 chess/
 ├── core.h / core.cpp              Board, Judge, Stats, Pos, ChessType
 ├── ui.h / ui.cpp                  UI（EasyX 封装）
-├── player.h / player.cpp          Player 基类 + 5 个派生棋手
+├── player.h / player.cpp          Player 基类 + 派生棋手（人类/通用评分AI/Mimimax/API）
 ├── ai_config.h / ai_config.cpp    AIConfig（API AI JSON 配置加载）
 ├── ai_player.h / ai_player.cpp    APIPlayer（远程大模型 API 玩家）
 ├── storage.h / storage.cpp        StorageManager（悔棋/回访/残局/统计/命令）
@@ -255,7 +255,7 @@ place():
 ## 已知限制
 
 - 仅支持 Windows，目前未做跨平台适配。
-- EasyJudge / PureGreed 系列为启发式评分；Minimax++ 采用 alpha-beta 剪枝搜索（深度 4、半径 2，可在 `player.h` 顶部 `constexpr` 调整），复杂局面下仍可能非最优。
+- `GreedyScoringAI` 为启发式评分（攻防权重参数化，`player.h` 中构造参数可调）；Minimax++ 采用 alpha-beta 剪枝搜索（深度 4、半径 2，可在 `player.h` 顶部 `constexpr` 调整），复杂局面下仍可能非最优。
 
 - 评估函数为全盘扫描（O(N²)），未做增量评估；置换表在每次顶层决策时清空。
 - 控制台命令需用户点击控制台窗口方可输入（Windows GUI 程序特性）。

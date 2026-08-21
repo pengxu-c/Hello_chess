@@ -1,6 +1,6 @@
 // ============================================================
 // player.cpp - 棋手类实现
-// HumanPlayer / EasyJudgeAI / PureGreed10 / PureGreed11 / MinimaxPP
+// HumanPlayer / GreedyScoringAI / MinimaxPP
 // ============================================================
 #include "player.h"
 #include "ui.h"
@@ -237,104 +237,53 @@ bool HumanPlayer::isHuman() const { return true; }
 bool HumanPlayer::needsDelay() const { return false; }
 const char* HumanPlayer::name() const { return "Human"; }
 
-// ---------- EasyJudgeAI ----------
-EasyJudgeAI::EasyJudgeAI(Judge& judge, Stats& stats) : judge_(judge), stats_(stats) {}
+// ---------- GreedyScoringAI：统一攻防评分 AI ----------
+// 一个实现覆盖任意难度档：attackWeight=0 纯防守（EasyJudge/PG1.0），>0 加入进攻（PG1.1）
+GreedyScoringAI::GreedyScoringAI(double attackWeight, const char* displayName)
+    : attackWeight_(attackWeight), name_(displayName) {}
 
-
-// EasyJudge: 必胜类 → 禁用机制 → 防守(0-150)
-Pos EasyJudgeAI::place(Board& board, ChessType color) {
+// 决策流程：必胜类 → 对方一步成连 → 关键威胁 → 必防位 → 全盘扫描（均带进攻权重）
+Pos GreedyScoringAI::place(Board& board, ChessType color) {
     ChessType opp = opponent(color);
     Pos win = findWinMove(board, color);
     if (win.r >= 0) return win;
     Pos oppWin = findOppOneStepWin(board, opp);
     if (oppWin.r >= 0) return oppWin;
-    // 对方活n-1/活n-2威胁: 精确候选为威胁位置, 用大maxCap区分威胁等级
-    auto critical = findOppCriticalThreats(board, opp);
-    if (!critical.empty()) {
-        std::vector<ScoredMove> cs;
-        for (auto& m : critical) cs.push_back({pointScore(board, m.r, m.c, opp, 1000000), m.r, m.c});
-        return pickBestNoRandom(cs);
-    }
-    auto must = findMustDefend(board, opp);
-    std::vector<ScoredMove> scored;
-    if (!must.empty()) {
-        for (auto& m : must) scored.push_back({pointScore(board, m.r, m.c, opp, 150), m.r, m.c});
-        return pickBestNoRandom(scored);
-    }
-    for (int i = 0; i < ROWS; i++)
-        for (int j = 0; j < COLS; j++) {
-            if (board.at(i, j) != ChessType::None) continue;
-            scored.push_back({pointScore(board, i, j, opp, 150), i, j});
-        }
-    return pickBestMove(scored);
-}
-bool EasyJudgeAI::isHuman() const { return false; }
-const char* EasyJudgeAI::name() const { return "EasyJudge"; }
 
-// ---------- PureGreed10：必胜类 → 禁用机制 → 防守(0-150) ----------
-Pos PureGreed10::place(Board& board, ChessType color) {
-    ChessType opp = opponent(color);
-    Pos win = findWinMove(board, color);
-    if (win.r >= 0) return win;
-    Pos oppWin = findOppOneStepWin(board, opp);
-    if (oppWin.r >= 0) return oppWin;
-    auto critical = findOppCriticalThreats(board, opp);
-    if (!critical.empty()) {
-        std::vector<ScoredMove> cs;
-        for (auto& m : critical) cs.push_back({pointScore(board, m.r, m.c, opp, 1000000), m.r, m.c});
-        return pickBestNoRandom(cs);
-    }
-    auto must = findMustDefend(board, opp);
-    std::vector<ScoredMove> scored;
-    if (!must.empty()) {
-        for (auto& m : must) scored.push_back({pointScore(board, m.r, m.c, opp, 150), m.r, m.c});
-        return pickBestNoRandom(scored);
-    }
-    for (int i = 0; i < ROWS; i++)
-        for (int j = 0; j < COLS; j++) {
-            if (board.at(i, j) != ChessType::None) continue;
-            scored.push_back({pointScore(board, i, j, opp, 150), i, j});
-        }
-    return pickBestMove(scored);
-}
-bool PureGreed10::isHuman() const { return false; }
-const char* PureGreed10::name() const { return "PureGreed 1.0"; }
+    // 统一单点火评估：防守(对方价值) + 进攻权重*己方价值，maxCap 控制量纲
+    auto scoreAt = [&](int r, int c, int maxCap) {
+        int defense = pointScore(board, r, c, opp, maxCap);
+        int offense = (attackWeight_ > 0)
+                      ? (int)(pointScore(board, r, c, color, maxCap) * attackWeight_)
+                      : 0;
+        return defense + offense;
+    };
 
-// ---------- PureGreed11：必胜类 → 禁用机制 → 防守(0-150) + 0.9*进攻(0-135) ----------
-Pos PureGreed11::place(Board& board, ChessType color) {
-    ChessType opp = opponent(color);
-    Pos win = findWinMove(board, color);
-    if (win.r >= 0) return win;
-    Pos oppWin = findOppOneStepWin(board, opp);
-    if (oppWin.r >= 0) return oppWin;
+    // 对方活n-1/活n-2威胁：精确候选，大maxCap区分威胁等级
     auto critical = findOppCriticalThreats(board, opp);
     if (!critical.empty()) {
         std::vector<ScoredMove> cs;
-        for (auto& m : critical) {
-            int s = pointScore(board, m.r, m.c, opp, 1000000) + (pointScore(board, m.r, m.c, color, 1000000) * 9 / 10);
-            cs.push_back({s, m.r, m.c});
-        }
+        for (auto& m : critical) cs.push_back({scoreAt(m.r, m.c, 1000000), m.r, m.c});
         return pickBestNoRandom(cs);
     }
+
     auto must = findMustDefend(board, opp);
     std::vector<ScoredMove> scored;
     if (!must.empty()) {
-        for (auto& m : must) {
-            int s = pointScore(board, m.r, m.c, opp, 150) + (pointScore(board, m.r, m.c, color, 150) * 9 / 10);
-            scored.push_back({s, m.r, m.c});
-        }
+        for (auto& m : must) scored.push_back({scoreAt(m.r, m.c, 150), m.r, m.c});
         return pickBestNoRandom(scored);
     }
+
     for (int i = 0; i < ROWS; i++)
         for (int j = 0; j < COLS; j++) {
             if (board.at(i, j) != ChessType::None) continue;
-            int s = pointScore(board, i, j, opp, 150) + (pointScore(board, i, j, color, 150) * 9 / 10);
-            scored.push_back({s, i, j});
+            scored.push_back({scoreAt(i, j, 150), i, j});
         }
     return pickBestMove(scored);
 }
-bool PureGreed11::isHuman() const { return false; }
-const char* PureGreed11::name() const { return "PureGreed 1.1"; }
+bool GreedyScoringAI::isHuman() const { return false; }
+bool GreedyScoringAI::needsDelay() const { return true; }
+const char* GreedyScoringAI::name() const { return name_.c_str(); }
 
 // ---------- Minimax++：alpha-beta 剪枝搜索 ----------
 MinimaxPP::MinimaxPP(Judge& judge) : judge_(judge) {}

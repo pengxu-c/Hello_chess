@@ -35,7 +35,7 @@ bool AIConfig::loadFromFile(const std::string& path) {
         if (enabled) {
             printf(">> AIConfig loaded: model=%s, provider=%s\n", model.c_str(), provider.c_str());
         } else {
-            printf(">> AIConfig: missing api_key/model. API player falls back to Minimax++.\n");
+            printf(">> AIConfig: missing api_url/api_key/model. API player falls back to Minimax++.\n");
         }
         return true;
     } catch (const std::exception& e) {

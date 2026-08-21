@@ -148,12 +148,35 @@ Pos APIPlayer::place(Board& board, ChessType color) {
         // OpenAI 兼容响应格式: choices[0].message.content
         std::string content = j.at("choices").at(0).at("message").at("content");
         Pos p = parseResponse(content);
-        if (p.valid()) {
+        if (p.valid() && board.inBounds(p.r, p.c) && board.at(p.r, p.c) == ChessType::None) {
+            failCount_ = 0;    // 一次成功即可归零
             printf(">> APIPlayer(%s) -> (%d,%d)\n", cfg_.displayName.c_str(), p.r, p.c);
             return p;
         }
     } catch (const std::exception& e) {
         printf(">> APIPlayer: JSON parse error: %s\n", e.what());
     }
+    // 连续失败防护：达到阈值后改用本地兜底，避免主循环无休止重试
+    if (++failCount_ >= kMaxFails) {
+        printf(">> APIPlayer: %d consecutive failures, using fallback move.\n", kMaxFails);
+        failCount_ = 0;
+        return fallbackMove(board);
+    }
     return {-1, -1};   // 解析失败返回无效位置，主循环将重试
+}
+
+// 兜底着法：优先中心，其次按螺旋找靠近中心的首个空位
+Pos APIPlayer::fallbackMove(const Board& board) const {
+    int n = board.size();
+    int cr = n / 2, cc = n / 2;
+    if (board.at(cr, cc) == ChessType::None) return {cr, cc};
+    for (int radius = 1; radius <= n; radius++) {
+        for (int r = 0; r < n; r++) {
+            for (int c = 0; c < n; c++) {
+                if (board.at(r, c) != ChessType::None) continue;
+                if (abs(r - cr) <= radius && abs(c - cc) <= radius) return {r, c};
+            }
+        }
+    }
+    return {-1, -1};
 }

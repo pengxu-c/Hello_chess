@@ -18,8 +18,13 @@ private:
     AIConfig cfg_;
     std::string nameBuf_;   // 持有 name() 返回的字符串内存
 
+    // 连续失败防护：API 持续异常时暂不无限重试，改用本地兜底着法
+    static constexpr int kMaxFails = 3;
+    int failCount_ = 0;
+
     std::string boardToString(const Board& board) const;
     Pos parseResponse(const std::string& text) const;
+    Pos fallbackMove(const Board& board) const;                 // 兜底：选中心附近空位
 
     static size_t writeCallback(void* ptr, size_t size, size_t nmemb, void* userdata);
     std::string callAPI(const std::string& boardStr, ChessType color);

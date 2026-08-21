@@ -17,7 +17,9 @@ public:
     Pos clickPos() const;                       // 最近一次点击的棋盘坐标
     bool hasClick() const;                      // 本帧是否有新点击
     void clearClick();                          // 消费点击标记
-    void render(const Board& board, Pos hover); // 渲染棋盘+棋子+提示圈
+    void render(const Board& board, Pos hover,                      // 渲染棋盘+棋子+提示圈+最后一手标记+回合指示
+                Pos lastBlack = { -1, -1 }, Pos lastWhite = { -1, -1 },
+                ChessType turn = ChessType::None);              // turn：当前回合方，None=不显示
     void messageBox(const wchar_t* text);       // 弹出提示框
     int askYesNo(const wchar_t* text);          // 弹出是/否对话框，返回选择
 private:
@@ -30,5 +32,7 @@ private:
     Pos pixelToCell(int x, int y) const;        // 像素坐标转棋盘坐标
     void drawGrid();                            // 绘制网格线
     void drawPieces(const Board& board);        // 绘制棋子
+    void drawLastMoves(const Board& board, Pos lastBlack, Pos lastWhite);  // 绘制最后一手标记环
+    void drawTurnIndicator(ChessType turn);     // 左侧绘制当前回合指示棋子
     void drawHover(Pos hover);                  // 绘制悬停提示圈
 };
