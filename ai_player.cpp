@@ -8,6 +8,16 @@
 #include <sstream>
 #include <algorithm>
 
+// 在 str 中将所有 key 替换为 value（消除 callAPI 中分散的 while-find-replace 代码）
+// file-local static：仅本翻译单元可见，无需暴露到头文件
+static void replaceTemplate(std::string& str, const std::string& key, const std::string& value) {
+    size_t p = 0;
+    while ((p = str.find(key, p)) != std::string::npos) {
+        str.replace(p, key.size(), value);
+        p += value.size();
+    }
+}
+
 APIPlayer::APIPlayer(const AIConfig& cfg) : cfg_(cfg) {
     nameBuf_ = cfg_.displayName;
 }
@@ -16,6 +26,7 @@ bool APIPlayer::isHuman() const { return false; }
 bool APIPlayer::needsDelay() const { return true; }
 const char* APIPlayer::name() const { return nameBuf_.c_str(); }
 
+// 棋盘序列化为文本：B=黑/W=白/.=空，逐行空格分隔，供大模型读取局面。
 std::string APIPlayer::boardToString(const Board& board) const {
     std::ostringstream oss;
     int n = board.size();
@@ -32,7 +43,10 @@ std::string APIPlayer::boardToString(const Board& board) const {
     return oss.str();
 }
 
-Pos APIPlayer::parseResponse(const std::string& text) const {
+// 从模型回复文本中解析坐标：找首个逗号，向前/向后收集数字作为行/列，越界返回无效。
+// 容错设计：能匹配 "7,8"、"(7,8)"、"row 7, col 8" 等多种格式。
+// boardSize 用于边界检查（替代原全局棋盘尺寸变量）
+Pos APIPlayer::parseResponse(const std::string& text, int boardSize) const {
     auto comma = std::find(text.begin(), text.end(), ',');
     if (comma != text.end()) {
         std::string rStr, cStr;
@@ -50,7 +64,7 @@ Pos APIPlayer::parseResponse(const std::string& text) const {
         if (!rStr.empty() && !cStr.empty()) {
             int r = std::stoi(rStr);
             int c = std::stoi(cStr);
-            if (r >= 0 && r < ROWS && c >= 0 && c < COLS) return {r, c};
+            if (r >= 0 && r < boardSize && c >= 0 && c < boardSize) return {r, c};
         }
     }
     return {-1, -1};
@@ -64,7 +78,8 @@ size_t APIPlayer::writeCallback(void* ptr, size_t size, size_t nmemb, void* user
 }
 
 // 发起 OpenAI 兼容的 chat/completions 请求，成功返回原始 JSON 响应文本
-std::string APIPlayer::callAPI(const std::string& boardStr, ChessType color) {
+// boardSize/winLen 用于提示词模板变量替换（替代原全局棋盘尺寸/连珠数变量）
+std::string APIPlayer::callAPI(const std::string& boardStr, ChessType color, int boardSize, int winLen) {
     CURL* curl = curl_easy_init();
     if (!curl) return "";   // curl 初始化失败
 
@@ -72,30 +87,18 @@ std::string APIPlayer::callAPI(const std::string& boardStr, ChessType color) {
     std::string sysPrompt = cfg_.systemPrompt;
     std::string userPrompt = cfg_.userPromptTemplate;
     {
-        // 模板变量替换
-        std::string sz = std::to_string(ROWS);
-        std::string wl = std::to_string(WIN_LEN);
+        // 模板变量替换（尺寸/连珠数由参数传入，不再读全局）
+        std::string sz = std::to_string(boardSize);
+        std::string wl = std::to_string(winLen);
         std::string c  = (color == ChessType::Black) ? "Black" : "White";
-        for (auto& kv : {std::make_pair("{size}", sz), {"{win_len}", wl}, {"{color}", c}}) {
-            std::string k = kv.first, v = kv.second;
-            size_t p = 0;
-            while ((p = sysPrompt.find(k, p)) != std::string::npos) {
-                sysPrompt.replace(p, k.size(), v);
-                p += v.size();
-            }
-            p = 0;
-            while ((p = userPrompt.find(k, p)) != std::string::npos) {
-                userPrompt.replace(p, k.size(), v);
-                p += v.size();
-            }
-        }
-    }
-    {
-        size_t p = 0;
-        while ((p = userPrompt.find("{board}", p)) != std::string::npos) {
-            userPrompt.replace(p, 7, boardStr);
-            p += boardStr.size();
-        }
+        // 统一调用 replaceTemplate 替换所有模板变量（含 {board}），消除分散的 while-find-replace
+        replaceTemplate(sysPrompt,   "{size}",    sz);
+        replaceTemplate(sysPrompt,   "{win_len}", wl);
+        replaceTemplate(sysPrompt,   "{color}",   c);
+        replaceTemplate(userPrompt,  "{size}",    sz);
+        replaceTemplate(userPrompt,  "{win_len}", wl);
+        replaceTemplate(userPrompt,  "{color}",   c);
+        replaceTemplate(userPrompt,  "{board}",   boardStr);
     }
 
     nlohmann::json body;
@@ -140,14 +143,14 @@ Pos APIPlayer::place(Board& board, ChessType color) {
 
     // 1. 棋盘序列化 → 2. 请求 API → 3. 解析响应坐标
     std::string boardStr = boardToString(board);
-    std::string response = callAPI(boardStr, color);
+    std::string response = callAPI(boardStr, color, board.size(), board.winLen());
     if (response.empty()) return {-1, -1};
 
     try {
         nlohmann::json j = nlohmann::json::parse(response);
         // OpenAI 兼容响应格式: choices[0].message.content
         std::string content = j.at("choices").at(0).at("message").at("content");
-        Pos p = parseResponse(content);
+        Pos p = parseResponse(content, board.size());
         if (p.valid() && board.inBounds(p.r, p.c) && board.at(p.r, p.c) == ChessType::None) {
             failCount_ = 0;    // 一次成功即可归零
             printf(">> APIPlayer(%s) -> (%d,%d)\n", cfg_.displayName.c_str(), p.r, p.c);

@@ -23,9 +23,10 @@ private:
     int failCount_ = 0;
 
     std::string boardToString(const Board& board) const;
-    Pos parseResponse(const std::string& text) const;
+    Pos parseResponse(const std::string& text, int boardSize) const;   // 解析坐标，boardSize 用于边界检查
     Pos fallbackMove(const Board& board) const;                 // 兜底：选中心附近空位
 
     static size_t writeCallback(void* ptr, size_t size, size_t nmemb, void* userdata);
-    std::string callAPI(const std::string& boardStr, ChessType color);
+    // callAPI 额外接收棋盘尺寸与连珠数（用于提示词模板替换，替代原全局棋盘尺寸/连珠数变量）
+    std::string callAPI(const std::string& boardStr, ChessType color, int boardSize, int winLen);
 };

@@ -107,25 +107,7 @@ int StorageManager::moveCount() const {
 
 // ====== 棋局回访 ======
 std::vector<std::string> StorageManager::listGames() const {
-    std::vector<std::string> ids;
-    std::string dir = dirPath(config_.gamesDir);
-    ensureDir(dir);
-
-    _finddata_t fd;
-    std::string pattern = dir + "\\*" + config_.fileExt;
-    intptr_t handle = _findfirst(pattern.c_str(), &fd);
-    if (handle == -1) return ids;
-    do {
-        if (!(fd.attrib & _A_SUBDIR)) {
-            std::string name = fd.name;
-            size_t pos = name.rfind(config_.fileExt);
-            if (pos != std::string::npos) name = name.substr(0, pos);
-            ids.push_back(name);
-        }
-    } while (_findnext(handle, &fd) == 0);
-    _findclose(handle);
-    std::sort(ids.begin(), ids.end());
-    return ids;
+    return listIds(config_.gamesDir);
 }
 
 std::vector<GameRecord> StorageManager::listGameRecords() const {
@@ -142,41 +124,22 @@ bool StorageManager::loadGame(const std::string& id, GameRecord& record) const {
     return loadRecord(path, record);
 }
 
+// 回访棋局：载入 id 后清空棋盘并重放前 upToStep 步（-1 表示全部），供 UI 逐步渲染。
 bool StorageManager::replayGame(const std::string& id, Board& board, int upToStep) const {
     GameRecord record;
     if (!loadGame(id, record)) return false;
-
     board.clear();
-    int count = (upToStep < 0) ? (int)record.moves.size()
-                               : std::min(upToStep, (int)record.moves.size());
-    for (int i = 0; i < count; i++) {
-        const auto& mv = record.moves[i];
-        board.set(mv.r, mv.c, mv.color);
+    int n = (int)record.moves.size();
+    if (upToStep < 0 || upToStep > n) upToStep = n;
+    for (int i = 0; i < upToStep; i++) {
+        board.set(record.moves[i].r, record.moves[i].c, record.moves[i].color);
     }
     return true;
 }
 
 // ====== 残局保存/载入 ======
 std::vector<std::string> StorageManager::listResumes() const {
-    std::vector<std::string> ids;
-    std::string dir = dirPath(config_.resumesDir);
-    ensureDir(dir);
-
-    _finddata_t fd;
-    std::string pattern = dir + "\\*" + config_.fileExt;
-    intptr_t handle = _findfirst(pattern.c_str(), &fd);
-    if (handle == -1) return ids;
-    do {
-        if (!(fd.attrib & _A_SUBDIR)) {
-            std::string name = fd.name;
-            size_t pos = name.rfind(config_.fileExt);
-            if (pos != std::string::npos) name = name.substr(0, pos);
-            ids.push_back(name);
-        }
-    } while (_findnext(handle, &fd) == 0);
-    _findclose(handle);
-    std::sort(ids.begin(), ids.end());
-    return ids;
+    return listIds(config_.resumesDir);
 }
 
 bool StorageManager::saveResume(const std::string& note) {
@@ -206,9 +169,9 @@ bool StorageManager::restoreResume(const std::string& id, Board& board,
     winLength = record.winLength;
     p1Type = record.player1Type;
     p2Type = record.player2Type;
-    ROWS = COLS = boardSize;
-    WIN_LEN = winLength;
-    board.resize();
+    // 设置棋盘尺寸与连珠数到 Board 成员（不再写全局可变变量）
+    board.resize(boardSize);
+    board.setWinLen(winLength);
     board.clear();
 
     for (const auto& mv : record.moves) {
@@ -386,6 +349,29 @@ std::string StorageManager::tryReadConsoleLine() {
 }
 
 // ====== 私有工具 ======
+// 列出某子目录下所有记录 ID：扫描文件、去除扩展名、字典序排序
+std::vector<std::string> StorageManager::listIds(const std::string& subdir) const {
+    std::vector<std::string> ids;
+    std::string dir = dirPath(subdir);
+    ensureDir(dir);
+
+    _finddata_t fd;
+    std::string pattern = dir + "\\*" + config_.fileExt;
+    intptr_t handle = _findfirst(pattern.c_str(), &fd);
+    if (handle == -1) return ids;
+    do {
+        if (!(fd.attrib & _A_SUBDIR)) {
+            std::string name = fd.name;
+            size_t pos = name.rfind(config_.fileExt);
+            if (pos != std::string::npos) name = name.substr(0, pos);
+            ids.push_back(name);
+        }
+    } while (_findnext(handle, &fd) == 0);
+    _findclose(handle);
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
 std::string StorageManager::generateId(const std::string& prefix) const {
     auto now = std::chrono::system_clock::now();
     auto t = std::chrono::system_clock::to_time_t(now);
@@ -563,6 +549,7 @@ void StorageManager::updateGlobalStats(const GameRecord& record) {
 
 std::string StorageManager::statusToString(GameStatus s) const {
     switch (s) {
+// GameStatus 枚举转字符串（用于序列化）。
         case GameStatus::InProgress: return "InProgress";
         case GameStatus::BlackWin:   return "BlackWin";
         case GameStatus::WhiteWin:   return "WhiteWin";
@@ -573,6 +560,7 @@ std::string StorageManager::statusToString(GameStatus s) const {
     }
 }
 
+// 字符串转 GameStatus 枚举（用于反序列化），未知串回退为 InProgress。
 GameStatus StorageManager::stringToStatus(const std::string& s) const {
     if (s == "InProgress") return GameStatus::InProgress;
     if (s == "BlackWin")   return GameStatus::BlackWin;

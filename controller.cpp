@@ -44,12 +44,31 @@ Player* GameController::createPlayer(int choice) {
     }
 }
 
+// 释放旧玩家并按编号创建新玩家（消除 selectPlayers / loadResumeMenu 中的重复 delete+createPlayer）
+void GameController::recreatePlayers(int p1Type, int p2Type) {
+    delete player1_;
+    delete player2_;
+    player1_ = createPlayer(p1Type);
+    player2_ = createPlayer(p2Type);
+}
+
+// 询问是否返回主菜单：读取一行，返回 true 当且仅当用户输入 y/Y；
+// 输入失败或非 y/Y 时返回 false（调用方据此决定 break/continue，保持原控制流）
+bool GameController::askReturnToMenu() {
+    printf("Return to main menu? (y/n): ");
+    char buf[16];
+    if (!fgets(buf, sizeof(buf), stdin)) return false;
+    return buf[0] == 'y' || buf[0] == 'Y';
+}
+
 // 按 boardSize_ 计算网格像素与偏移，使棋盘居中 960×600 窗口
+// 用局部变量计算后通过 ui_->setLayout 设置到 UI 成员（不再写全局）
 void GameController::applyBoardLayout() {
-    GRID_SIZE = 560 / (boardSize_ - 1);
-    if (GRID_SIZE < 12) GRID_SIZE = 12;
-    XOFFSET = (960 - (boardSize_ - 1) * GRID_SIZE) / 2;
-    YOFFSET = (600 - (boardSize_ - 1) * GRID_SIZE) / 2;
+    int gridSize = 560 / (boardSize_ - 1);
+    if (gridSize < 12) gridSize = 12;
+    int xOffset = (960 - (boardSize_ - 1) * gridSize) / 2;
+    int yOffset = (600 - (boardSize_ - 1) * gridSize) / 2;
+    if (ui_) ui_->setLayout(gridSize, xOffset, yOffset, boardSize_);
 }
 
 // 终端配置棋盘尺寸与连珠数 + 存储开关
@@ -59,20 +78,20 @@ void GameController::configureRules() {
     if (!fgets(buf, sizeof(buf), stdin)) return;
     if (buf[0] == 'c' || buf[0] == 'C') {
         int n = 15, k = 5;
-        printf("Board size N (5..30, default 15): ");
-        if (fgets(buf, sizeof(buf), stdin) && sscanf_s(buf, "%d", &n) != 1) n = 15;
-        if (n < 5 || n > 30) n = 15;
-        printf("Win length k (3..%d, default 5): ", n);
+        printf("Win length k (4..15, default 5): ");
         if (fgets(buf, sizeof(buf), stdin) && sscanf_s(buf, "%d", &k) != 1) k = 5;
-        if (k < 3 || k > n) k = 5;
+        if (k < 4 || k > 15) k = 5;
+        printf("Board size N (%d..30, default 15): ", k);
+        if (fgets(buf, sizeof(buf), stdin) && sscanf_s(buf, "%d", &n) != 1) n = 15;
+        if (n < k || n > 30) n = 15;
         boardSize_ = n;
         winLength_ = k;
     }
 
-    ROWS = COLS = boardSize_;
-    WIN_LEN = winLength_;
+    // 设置棋盘尺寸与连珠数到 Board 成员（不再写全局可变变量）
+    board_.resize(boardSize_);
+    board_.setWinLen(winLength_);
     applyBoardLayout();
-    board_.resize();
     printf("Rules set: %dx%d board, %d-in-a-row to win.\n\n", boardSize_, boardSize_, winLength_);
 
     // 记忆存储开关（默认关闭）
@@ -122,10 +141,7 @@ void GameController::selectPlayers() {
 
     p1Type_ = c1;
     p2Type_ = c2;
-    delete player1_;
-    delete player2_;
-    player1_ = createPlayer(c1);
-    player2_ = createPlayer(c2);
+    recreatePlayers(c1, c2);
 
     printf("\nPlayer 1: %s (Black)  vs  Player 2: %s (White)\n", player1_->name(), player2_->name());
     printf("----------------------------------\n");
@@ -160,15 +176,13 @@ bool GameController::loadResumeMenu() {
         printf("Failed to load resume: %s\n", id.c_str());
         return false;
     }
+    // restoreResume 内部已通过 board.resize/setWinLen 设置棋盘尺寸与连珠数
     boardSize_ = bs;
     winLength_ = wl;
     p1Type_ = p1t;
     p2Type_ = p2t;
     applyBoardLayout();
-    delete player1_;
-    delete player2_;
-    player1_ = createPlayer(p1t);
-    player2_ = createPlayer(p2t);
+    recreatePlayers(p1t, p2t);
     printf(">> Resume loaded: %s (%dx%d, %s vs %s, %d moves)\n",
            id.c_str(), bs, wl, player1_->name(), player2_->name(),
            storage_.moveCount());
@@ -207,10 +221,10 @@ void GameController::replayMenu() {
 
     boardSize_ = record.boardSize;
     winLength_ = record.winLength;
-    ROWS = COLS = boardSize_;
-    WIN_LEN = winLength_;
+    // 设置棋盘尺寸与连珠数到 Board 成员（不再写全局可变变量）
+    board_.resize(boardSize_);
+    board_.setWinLen(winLength_);
     applyBoardLayout();
-    board_.resize();
 
     ui_->initWindow(960, 600);
 
@@ -292,8 +306,8 @@ void GameController::playOneGame() {
                 stats_.recordMove(currentColor);
                 storage_.recordMove(pos.r, pos.c, currentColor);
 
-                // 判定胜负
-                if (judge_.checkWin(board_, pos, currentColor, winLength_)) {
+                // 判定胜负（checkWin 内部用 board_.winLen()，不再传 winLength_）
+                if (judge_.checkWin(board_, pos, currentColor)) {
                     const wchar_t* who = (current == player1_) ? L"Player 1 wins!" : L"Player 2 wins!";
                     ui_->messageBox(who);
                     storage_.endGame(current == player1_ ? GameStatus::BlackWin : GameStatus::WhiteWin);
@@ -344,17 +358,11 @@ void GameController::run() {
                 resumeLoaded = loadResumeMenu();
             } else if (sc == 3) {
                 replayMenu();
-                printf("Return to main menu? (y/n): ");
-                char b2[16];
-                if (!fgets(b2, sizeof(b2), stdin)) break;
-                if (b2[0] != 'y' && b2[0] != 'Y') break;
+                if (!askReturnToMenu()) break;
                 continue;
             } else if (sc == 4) {
                 storage_.printGlobalStats();
-                printf("Return to main menu? (y/n): ");
-                char b2[16];
-                if (!fgets(b2, sizeof(b2), stdin)) break;
-                if (b2[0] != 'y' && b2[0] != 'Y') break;
+                if (!askReturnToMenu()) break;
                 continue;
             }
         }
@@ -381,9 +389,6 @@ void GameController::run() {
         ui_->close();
 
         // 窗口已关，控制台询问是否回到主菜单重新选择棋手
-        printf("Return to main menu? (y/n): ");
-        char buf[16];
-        if (!fgets(buf, sizeof(buf), stdin)) break;
-        if (buf[0] != 'y' && buf[0] != 'Y') break;
+        if (!askReturnToMenu()) break;
     }
 }

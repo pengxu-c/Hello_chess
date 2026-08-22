@@ -1,5 +1,5 @@
 # Hello_chess
-多子棋（默认五子棋）
+五子棋（可有损扩展至多子棋）
 一个基于 EasyX 图形库的 Windows 多子棋游戏，使用 **C++17** 编写，面向对象设计，通过 CMake 构建（推荐MSVC编译器）。默认为 15×15 五子棋，支持自定义 N×N 棋盘与 n 连获胜。内置 **棋局存储管理系统**（悔棋、回访、残局保存/载入、全局统计）。
 
 > 本项目面向 Windows 平台，依赖 EasyX 图形库。
@@ -12,7 +12,7 @@
 - 对局双方：黑棋先手，白棋后手，轮流落子。
 - 胜利条件：率先在横、竖、斜任一方向上形成 **连续 n 颗同色棋子** 者获胜。
 - 平局：棋盘填满仍无人达成 n 连，判为平局。
-- **自定义规则**：启动时控制台提示 `Customize rules?`，输入 `c` 可设置棋盘尺寸 N（5..30）与连珠数 n（3..N）；直接回车则使用默认 15×15 五子棋。
+- **自定义规则**：启动时控制台提示 `Customize rules?`，输入 `c` 可先设置连珠数 n（4..15）再设置棋盘尺寸 N（n..30）；直接回车则使用默认 15×15 五子棋。
 
 ## 棋手类型
 
@@ -94,10 +94,11 @@ moveCount=59
 
 | 文件 | 类 | 职责 |
 |:-----|:---|:-----|
-| `core.h/.cpp` | `Board` | 棋盘数据，落子/读取/判满 |
-| | `Judge` | 胜负判定（连珠长度参数化） |
+| `core.h/.cpp` | `Board` | 棋盘数据（`std::vector` 一维），持有 size/winLen/emptyCount，落子/读取/O(1)判满 |
+| | `Judge` | 胜负判定，复用 `scanLine` 统一连珠统计 |
+| | `scanLine` | 公共 inline 线段扫描核，供 Judge 与各 AI 共用 |
 | | `Stats` | 数据统计（双方步数） |
-| `ui.h/.cpp` | `UI` | **封装全部 EasyX 调用**：窗口、渲染、鼠标、消息框 |
+| `ui.h/.cpp` | `UI` | **封装全部 EasyX 调用**，持有布局参数（gridSize/xOffset/yOffset/boardSize） |
 | `player.h/.cpp` | `Player` | 棋手抽象基类 |
 | | `HumanPlayer` | 人类，派生自 Player |
 | | `GreedyScoringAI` | **通用评分 AI**，攻防权重参数化，一次实现覆盖多档难度（0.0 纯防守 / 0.9 攻防） |
@@ -110,7 +111,8 @@ moveCount=59
 
 ### 类关系
 
-- `Judge` 是 `Board` 的**友元**，直接读取棋盘内部数据判定连珠。
+- **全局可变状态已消除**：棋盘尺寸/连珠数由 `Board` 成员持有，布局参数由 `UI` 成员持有，支持多棋盘并存、易于测试。
+- `scanLine`（core.h inline）为统一线段统计核，`Judge::checkWin` 与 player.cpp 的 `inlineCheckN`/`pointScore`/`findOppCriticalThreats` 共用，消除两套独立连珠判定实现。
 - `Player` 为抽象基类，各棋手**派生**自它，统一 `place()` 接口。
 - `HumanPlayer` 持有 `UI&` 引用获取鼠标输入；`GreedyScoringAI` 通过构造参数（权重/名称）实例化不同难度档，新增档位无需改类。
 - `GameController` **组合** `Board`/`Judge`/`Stats`/`StorageManager`（值语义）与 `UI*`、两个 `Player*`（堆，析构释放）。
@@ -206,14 +208,17 @@ Minimax++ 采用极小化极大搜索 + Alpha-Beta 剪枝，并集成多项性�
 |:-----|:-----|
 | 启发式排序 | 搜索前用 `pointScore` 对候选着法降序排序，优先搜索高分节点，剪枝效率提升 10-100 倍 |
 | Zobrist 置换表 | 64 位哈希标识局面，`unordered_map` 存储已搜索结果，避免重复计算相同局面 |
-| 静态缓冲 | `generateMoves` 用静态布尔数组去重，避免递归中堆分配 `vector<vector<bool>>` |
+| 静态缓冲 | `generateMoves` 用静态布尔数组去重，避免递归中堆分配 |
 | 统一评分表 | `evaluate` 与 `pointScore` 共用 `segValue` 评分核，消除量纲不一致 |
+| `scanLine` 统一核 | `Judge::checkWin`/`inlineCheckN`/`pointScore`/`findOppCriticalThreats` 共用线段统计，单点维护 |
+| 邻域扫描 | 威胁检测/必胜类限定已有棋子邻域（radius=2），替代全盘 O(N²) 扫描 |
+| O(1) 判满 | `Board` 维护 `emptyCount_`，`isFull()` 常数时间 |
 
 ### 正确性保障
 - **必胜类接管**：先检测 1 步 / 2 步必胜，命中直接落子。
 - **对方一步成连**：检测对方下一步成连位，必须立即堵。
 - **防守候选取并集**：活三 / 活四威胁（`critical`）与眠四 / 冲四必防（`must`）取**并集**而非互斥选择，修复旧版"同时存在活三与眠四时只防活三、被眠四连五杀"的致命漏洞。
-- **评分几何级数**：活四 ≫ 活三 ≫ 活二，优先级严格单调，对任意 WIN_LEN(3..N) 成立。
+- **评分几何级数**：活四 ≫ 活三 ≫ 活二，优先级严格单调，对任意连珠数(>=4) 成立。
 
 ### 决策流程
 ```

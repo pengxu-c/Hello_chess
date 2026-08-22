@@ -1,5 +1,7 @@
 // ============================================================
 // ui.cpp - UI 类实现（EasyX 图形库封装）
+// 所有原全局布局/尺寸变量的引用已替换为
+// 成员 gridSize_/xOffset_/yOffset_/boardSize_ 与 board.size()。
 // ============================================================
 #include "ui.h"
 #include <cmath>
@@ -8,21 +10,44 @@
 UI::UI() {}
 UI::~UI() {}
 
+// 创建指定宽高的 EasyX 图形窗口（保留控制台）。
 void UI::initWindow(int w, int h) {
     initgraph(w, h, EX_SHOWCONSOLE);
 
 }
 
+// 关闭图形窗口，释放 EasyX 资源。
 void UI::close() {
     closegraph();
 }
 
+// 设置网格布局参数（由 GameController::applyBoardLayout 计算后调用）
+void UI::setLayout(int gridSize, int xOffset, int yOffset, int boardSize) {
+    gridSize_  = gridSize;
+    xOffset_   = xOffset;
+    yOffset_   = yOffset;
+    boardSize_ = boardSize;
+}
+
 // 像素坐标转棋盘坐标（O(1) 数学定位，替代逐格遍历）
+// 边界检查用成员 boardSize_（由 setLayout 设置，替代原全局棋盘尺寸变量）
 Pos UI::pixelToCell(int x, int y) const {
-    int c = (x - XOFFSET + GRID_SIZE / 2) / GRID_SIZE;   // 四舍五入到最近格
-    int r = (y - YOFFSET + GRID_SIZE / 2) / GRID_SIZE;
-    if (r >= 0 && r < ROWS && c >= 0 && c < COLS) return { r, c };
+    int c = (x - xOffset_ + gridSize_ / 2) / gridSize_;   // 四舍五入到最近格
+    int r = (y - yOffset_ + gridSize_ / 2) / gridSize_;
+    if (r >= 0 && r < boardSize_ && c >= 0 && c < boardSize_) return { r, c };
     return { -1, -1 };
+}
+
+// 设置 EasyX 填充/线条颜色为指定棋子颜色（消除 drawPieces / drawTurnIndicator 中的重复颜色设置）
+// 白棋：白填充 + 黑描边；黑棋：黑填充 + 白描边（棕色背景上清晰可见）
+void UI::setPieceColor(ChessType color) {
+    if (color == ChessType::White) {
+        setfillcolor(WHITE);
+        setlinecolor(BLACK);
+    } else {
+        setfillcolor(BLACK);
+        setlinecolor(WHITE);
+    }
 }
 
 // 轮询鼠标消息：移动更新悬停，左键点击记录落子位置
@@ -44,38 +69,35 @@ void UI::pollMouse() {
     }
 }
 
+// 当前悬停/点击的棋盘坐标及点击状态查询与消费。
 Pos UI::hoverPos() const { return { hoverR_, hoverC_ }; }
 Pos UI::clickPos() const { return { clickR_, clickC_ }; }
 bool UI::hasClick() const { return hasClick_; }
 void UI::clearClick() { hasClick_ = false; }
 
-// 绘制棋盘网格线
-void UI::drawGrid() {
+// 绘制棋盘网格线（行列数取自 board.size()）
+void UI::drawGrid(const Board& board) {
+    int n = board.size();
     setlinecolor(RGB(139, 69, 19));
-    for (int i = 0; i < ROWS; i++)
-        line(XOFFSET, YOFFSET + i * GRID_SIZE,
-             XOFFSET + (COLS - 1) * GRID_SIZE, YOFFSET + i * GRID_SIZE);
-    for (int j = 0; j < COLS; j++)
-        line(XOFFSET + j * GRID_SIZE, YOFFSET,
-             XOFFSET + j * GRID_SIZE, YOFFSET + (ROWS - 1) * GRID_SIZE);
+    for (int i = 0; i < n; i++)
+        line(xOffset_, yOffset_ + i * gridSize_,
+             xOffset_ + (n - 1) * gridSize_, yOffset_ + i * gridSize_);
+    for (int j = 0; j < n; j++)
+        line(xOffset_ + j * gridSize_, yOffset_,
+             xOffset_ + j * gridSize_, yOffset_ + (n - 1) * gridSize_);
 }
 
 // 绘制所有棋子
 void UI::drawPieces(const Board& board) {
-    for (int i = 0; i < ROWS; i++) {
-        for (int j = 0; j < COLS; j++) {
+    int n = board.size();
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
             ChessType t = board.at(i, j);
             if (t == ChessType::None) continue;
-            int x = j * GRID_SIZE + XOFFSET;
-            int y = i * GRID_SIZE + YOFFSET;
-            if (t == ChessType::White) {
-                setfillcolor(WHITE);
-                setlinecolor(BLACK);
-            } else {
-                setfillcolor(BLACK);
-                setlinecolor(WHITE);
-            }
-            solidcircle(x, y, GRID_SIZE / 2 - 3);
+            int x = j * gridSize_ + xOffset_;
+            int y = i * gridSize_ + yOffset_;
+            setPieceColor(t);
+            solidcircle(x, y, gridSize_ / 2 - 3);
         }
     }
 }
@@ -84,9 +106,9 @@ void UI::drawPieces(const Board& board) {
 void UI::drawHover(Pos hover) {
     if (hover.valid()) {
         setlinecolor(BLUE);
-        int x = hover.c * GRID_SIZE + XOFFSET;
-        int y = hover.r * GRID_SIZE + YOFFSET;
-        circle(x, y, GRID_SIZE / 2 - 1);
+        int x = hover.c * gridSize_ + xOffset_;
+        int y = hover.r * gridSize_ + yOffset_;
+        circle(x, y, gridSize_ / 2 - 1);
     }
 }
 
@@ -103,11 +125,11 @@ void UI::drawLastMoves(const Board& board, Pos lastBlack, Pos lastWhite) {
         Pos p = m.p;
         if (!p.valid() || !board.inBounds(p.r, p.c)) continue;   // 无标记或越界则跳过
         if (board.at(p.r, p.c) != m.color) continue;             // 颜色不一致（撤销等）则不画
-        int x = p.c * GRID_SIZE + XOFFSET;
-        int y = p.r * GRID_SIZE + YOFFSET;
+        int x = p.c * gridSize_ + xOffset_;
+        int y = p.r * gridSize_ + yOffset_;
         setlinecolor(m.ring);
         setlinestyle(PS_SOLID, 3);                                // 加粗圆环更显眼
-        circle(x, y, GRID_SIZE / 2 + 2);                          // 外圈包住棋子
+        circle(x, y, gridSize_ / 2 + 2);                          // 外圈包住棋子
         setlinestyle(PS_SOLID, 1);                                // 恢复默认线宽
     }
 }
@@ -116,16 +138,10 @@ void UI::drawLastMoves(const Board& board, Pos lastBlack, Pos lastWhite) {
 // None 表示不显示（如回放/恢复场景）
 void UI::drawTurnIndicator(ChessType turn) {
     if (turn == ChessType::None) return;
-    int x = XOFFSET / 2;                       // 最左侧：棋盘左边界中点
+    int x = xOffset_ / 2;                       // 最左侧：棋盘左边界中点
     int y = 300;                               // 垂直居中（窗口高 600）
     // 绘制指示棋子（含白色描边，棕色背景上清晰可见）
-    if (turn == ChessType::White) {
-        setfillcolor(WHITE);
-        setlinecolor(BLACK);
-    } else {
-        setfillcolor(BLACK);
-        setlinecolor(WHITE);
-    }
+    setPieceColor(turn);
     solidcircle(x, y, 22);
     // 下方标注当前回合方
     settextcolor(BLACK);
@@ -139,7 +155,7 @@ void UI::render(const Board& board, Pos hover, Pos lastBlack, Pos lastWhite, Che
     BeginBatchDraw();
     setbkcolor(RGB(240, 220, 180));
     cleardevice();
-    drawGrid();
+    drawGrid(board);
     drawPieces(board);
     drawLastMoves(board, lastBlack, lastWhite);
     drawTurnIndicator(turn);
@@ -147,10 +163,12 @@ void UI::render(const Board& board, Pos hover, Pos lastBlack, Pos lastWhite, Che
     EndBatchDraw();
 }
 
+// 弹出消息框（仅确认按钮）。
 void UI::messageBox(const wchar_t* text) {
     MessageBox(GetHWnd(), text, L"Game Over", MB_OK);
 }
 
+// 弹出是/否对话框，返回 IDYES/IDNO。
 int UI::askYesNo(const wchar_t* text) {
     return MessageBox(GetHWnd(), text, L"Game Over", MB_YESNO | MB_ICONQUESTION);
 }

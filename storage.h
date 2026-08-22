@@ -150,6 +150,7 @@ private:
     std::string dirPath(const std::string& subdir) const;
     std::string filePath(const std::string& subdir, const std::string& filename) const;
     void ensureDir(const std::string& dir) const;
+    std::vector<std::string> listIds(const std::string& subdir) const;  // 列出某子目录全部记录ID(去扩展名,排序)
     bool saveRecord(const GameRecord& record, const std::string& subdir) const;
     bool loadRecord(const std::string& filepath, GameRecord& record) const;
     int64_t nowMs() const;
