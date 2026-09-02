@@ -71,12 +71,13 @@ void GameController::applyBoardLayout() {
     if (ui_) ui_->setLayout(gridSize, xOffset, yOffset, boardSize_);
 }
 
-// 终端配置棋盘尺寸与连珠数 + 存储开关
+// 终端配置棋盘尺寸与连珠数；仅输入 'c' 自定义规则后才询问记忆存储开关
 void GameController::configureRules() {
     printf("Customize rules? Type 'c' to customize, or press Enter for default (15x15, 5-in-a-row): ");
     char buf[64];
     if (!fgets(buf, sizeof(buf), stdin)) return;
-    if (buf[0] == 'c' || buf[0] == 'C') {
+    bool customized = (buf[0] == 'c' || buf[0] == 'C');
+    if (customized) {
         int n = 15, k = 5;
         printf("Win length k (4..15, default 5): ");
         if (fgets(buf, sizeof(buf), stdin) && sscanf_s(buf, "%d", &k) != 1) k = 5;
@@ -94,19 +95,21 @@ void GameController::configureRules() {
     applyBoardLayout();
     printf("Rules set: %dx%d board, %d-in-a-row to win.\n\n", boardSize_, boardSize_, winLength_);
 
-    // 记忆存储开关（默认关闭）
-    printf("Enable memory storage? (y/n, default n): ");
-    char buf2[64];
+    // 记忆存储开关：只有输入 'c' 进入自定义流程后才判断是否开启，默认关闭
     storage_.setEnabled(false);
-    if (fgets(buf2, sizeof(buf2), stdin)) {
-        storage_.setEnabled(buf2[0] == 'y' || buf2[0] == 'Y');
-    }
-    if (storage_.isEnabled()) {
-        printf(">> Memory storage ENABLED. Data saved to '%s\\' directory.\n",
-               storage_.config().dataDir.c_str());
-        printf(">> In-game commands (type in console): help, save, undo [n], abort, stats\n\n");
-    } else {
-        printf(">> Memory storage disabled.\n\n");
+    if (customized) {
+        printf("Enable memory storage? (y/n, default n): ");
+        char buf2[64];
+        if (fgets(buf2, sizeof(buf2), stdin)) {
+            storage_.setEnabled(buf2[0] == 'y' || buf2[0] == 'Y');
+        }
+        if (storage_.isEnabled()) {
+            printf(">> Memory storage ENABLED. Data saved to '%s\\' directory.\n",
+                   storage_.config().dataDir.c_str());
+            printf(">> In-game commands (type in console): help, save, undo [n], abort, stats\n\n");
+        } else {
+            printf(">> Memory storage disabled.\n\n");
+        }
     }
 }
 
