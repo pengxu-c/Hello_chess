@@ -15,6 +15,7 @@ public:
     void initWindow(int w, int h);              // 创建图形窗口
     void close();                               // 关闭窗口
     void pollMouse();                           // 轮询鼠标消息，更新悬停/点击状态
+    int pollKey();                              // 轮询键盘消息，返回按下的虚拟键码（无按键返回 0）
     Pos hoverPos() const;                       // 当前悬停的棋盘坐标
     Pos clickPos() const;                       // 最近一次点击的棋盘坐标
     bool hasClick() const;                      // 本帧是否有新点击

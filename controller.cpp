@@ -243,19 +243,29 @@ void GameController::replayMenu() {
 
         printf("\rStep %d / %d  ", step, total);
 
-        if (_kbhit()) {
+        // 回放键盘输入：由于 initgraph 后图形窗口获得焦点，
+        // 控制台 _kbhit() 检测不到按键，导致回放卡住。
+        // 优先读取 EasyX 图形窗口键盘消息（ui_->pollKey），
+        // 控制台 _kbhit() 作为后备，两种焦点场景均可操作。
+        int key = ui_->pollKey();
+        if (key == 0 && _kbhit()) {
             int ch = _getch();
-            if (ch == 27) break;                          // ESC
-            else if (ch == ' ' && step < total) step++;   // Space
-            else if ((ch == 'b' || ch == 'B') && step > 0) step--;  // B
-            else if (ch == 0 || ch == 224) {              // 特殊键
+            if (ch == 27)                  key = VK_ESCAPE;    // ESC
+            else if (ch == ' ')            key = VK_SPACE;     // Space
+            else if (ch == 'b' || ch == 'B') key = 'B';        // B
+            else if (ch == 0 || ch == 224) {                   // 特殊键前缀
                 if (_kbhit()) {
                     int ext = _getch();
-                    if (ext == 71 && step > 0) step = 0;           // Home
-                    else if (ext == 79 && step < total) step = total; // End
+                    if (ext == 71)         key = VK_HOME;      // Home
+                    else if (ext == 79)    key = VK_END;       // End
                 }
             }
         }
+        if (key == VK_ESCAPE) break;                                // ESC 退出
+        else if (key == VK_SPACE && step < total)     step++;       // Space 下一手
+        else if (key == 'B'      && step > 0)         step--;       // B 上一手
+        else if (key == VK_HOME  && step > 0)         step = 0;     // Home 开头
+        else if (key == VK_END   && step < total)     step = total; // End 结尾
         Sleep(30);
     }
     printf("\nReplay ended.\n");

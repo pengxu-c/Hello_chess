@@ -69,6 +69,18 @@ void UI::pollMouse() {
     }
 }
 
+// 轮询键盘消息：非阻塞读取 EasyX 键盘消息，捕获 WM_KEYDOWN 时返回其虚拟键码。
+// 用于回放等纯键盘交互场景——图形窗口获得焦点后，控制台 _kbhit() 检测不到按键，
+// 必须通过 EasyX 消息队列读取键盘，否则回放会"卡住"无响应。
+int UI::pollKey() {
+    if (peekmessage(&msg_, EX_KEY)) {
+        if (msg_.message == WM_KEYDOWN) {
+            return msg_.vkcode;
+        }
+    }
+    return 0;
+}
+
 // 当前悬停/点击的棋盘坐标及点击状态查询与消费。
 Pos UI::hoverPos() const { return { hoverR_, hoverC_ }; }
 Pos UI::clickPos() const { return { clickR_, clickC_ }; }
