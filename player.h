@@ -1,8 +1,9 @@
 // ============================================================
 // player.h - 棋手类声明
-// 抽象基类 Player，派生：HumanPlayer、GreedyScoringAI(多档位)、MinimaxPP、APIPlayer
+// 抽象基类 Player，派生：HumanPlayer、EasyJudgeAI、GreedyScoringAI(多档位)、MinimaxPP、APIPlayer
 // 每个棋手实现 place() 返回落子位置
 // 评分系统：单一评分核 segValue(几何级数梯度,对任意WIN_LEN成立) + 单点核 pointScore(攻防同函数)
+// 必胜/必防威胁检测统一由 threat.h/.cpp 的 ThreatDetector 提供（本文件不涉及）
 // 各 AI 攻防权重：EasyJudge=防守, PG1.0=防守, PG1.1=防守+0.9*进攻, Minimax++=搜索主导+0.001启发式
 // Minimax++ 增强：alpha-beta 剪枝 + 启发式排序 + Zobrist 置换表 + 静态缓冲 + 统一评分
 // ============================================================
@@ -44,6 +45,18 @@ public:
     const char* name() const override;
 private:
     UI& ui_;
+};
+
+// ---- 最简 AI：随机 + 堵（调用 ThreatDetector 拿必胜/必防候选，随机下）----
+// 定位：最弱、行为不可预测的陪练档。不做评分、不做搜索。
+// 决策：己方必胜直接下 → 必防候选（对方1步/2步/双活三）随机选一个 →
+//       无威胁则在对方棋子附近随机落子。
+class EasyJudgeAI : public Player {
+public:
+    Pos place(Board& board, ChessType color) override;
+    bool isHuman() const override;
+    bool needsDelay() const override;
+    const char* name() const override;
 };
 
 // ---- 通用评分 AI：单一实现，攻防权重 + 显示名参数化（可扩展任意难度档） ----

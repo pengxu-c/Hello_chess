@@ -102,6 +102,7 @@ moveCount=59
 | | `scanLine` | Common inline line-scan kernel shared by Judge and all AIs |
 | | `Stats` | Statistics (moves per side) |
 | `ui.h/.cpp` | `UI` | **Encapsulates all EasyX calls**, holds layout parameters (gridSize/xOffset/yOffset/boardSize) |
+| `threat.h/.cpp` | `ThreatDetector` | **Win/defense threat detection**: win-spot counting, 1/2-step wins, blocking, double-open-three creation; shared by all AIs |
 | `player.h/.cpp` | `Player` | Abstract player base class |
 | | `HumanPlayer` | Human, derived from Player |
 | | `GreedyScoringAI` | **Generic scoring AI** with parameterized attack/defense weights; one implementation covers multiple difficulty tiers (0.0 defense-only / 0.9 attack+defense) |
@@ -115,7 +116,7 @@ moveCount=59
 ### Class Relationships
 
 - **Global mutable state eliminated**: board size/win length are held by `Board` members, layout parameters by `UI` members, supporting multiple coexisting boards and easy testing.
-- `scanLine` (inline in core.h) is the unified line-counting kernel; `Judge::checkWin` and player.cpp's `inlineCheckN`/`pointScore`/`findOppCriticalThreats` share it, eliminating two independent line-detection implementations.
+- `scanLine` (inline in core.h) is the unified line-counting kernel; `Judge::checkWin`, `ThreatDetector` (threat.cpp) and player.cpp's `pointScore` share it, eliminating two independent line-detection implementations.
 - `Player` is the abstract base class; all players **derive** from it with a unified `place()` interface.
 - `HumanPlayer` holds a `UI&` reference for mouse input; `GreedyScoringAI` instantiates different difficulty tiers via constructor parameters (weights/name), so adding tiers requires no class changes.
 - `GameController` **composes** `Board`/`Judge`/`Stats`/`StorageManager` (value semantics) plus `UI*` and two `Player*` (heap, released in destructor).
@@ -213,24 +214,25 @@ Minimax++ uses Minimax search with Alpha-Beta pruning, plus multiple performance
 | Zobrist transposition table | 64-bit hashes identify positions; `unordered_map` stores searched results to avoid recomputing identical positions |
 | Static buffers | `generateMoves` uses static boolean arrays for dedup, avoiding heap allocation inside recursion |
 | Unified score table | `evaluate` and `pointScore` share the `segValue` scoring kernel, eliminating dimensional inconsistency |
-| Unified `scanLine` kernel | `Judge::checkWin`/`inlineCheckN`/`pointScore`/`findOppCriticalThreats` share line counting, single-point maintenance |
+| Unified `scanLine` kernel | `Judge::checkWin`/`ThreatDetector`/`pointScore` share line counting, single-point maintenance |
 | Neighborhood scanning | Threat detection/winning moves limited to the neighborhood of existing stones (radius=2), replacing full-board O(N²) scans |
 | O(1) fullness check | `Board` maintains `emptyCount_`; `isFull()` runs in constant time |
 
 ### Correctness Guarantees
 - **Winning-move takeover**: detects 1-step / 2-step forced wins first; plays immediately on hit.
 - **Opponent one-to-win**: detects positions where the opponent would complete a line next move and blocks immediately.
-- **Defensive candidates take the union**: open-three/open-four threats (`critical`) and closed-four/four threats (`must`) are **unioned** rather than mutually exclusive, fixing the fatal legacy bug of "blocking only the open three while a closed four completes five".
+- **Defensive candidates take the union**: opponent's 2-step-win first moves and double-open-three creation points are **unioned**, fixing the fatal legacy bug of "blocking only one threat while another completes five".
 - **Geometric score scaling**: open-four ≫ open-three ≫ open-two; priorities are strictly monotonic for any win length (>=4).
 
 ### Decision Flow
 ```
 place():
-  1. Winning moves (1-step/2-step win) → return on hit
-  2. Opponent one-step completion → return the blocking point on hit
-  3. Merged defense candidates = critical ∪ must (deduplicated)
-  4. Candidates = defense candidates if non-empty, else all empty neighborhood cells
-  5. Run minimax (depth 3) on each candidate + heuristic tie-breaking, pick the best
+  1. Own 1-step win → return on hit
+  2. Opponent 1-step completion → return the blocking point on hit
+  3. Own 2-step win → return first move on hit
+  4. Merged defense candidates = opponent 2-step-win first moves ∪ double-open-three creation (deduplicated)
+  5. Candidates = defense candidates if non-empty, else all empty neighborhood cells
+  6. Run minimax (depth 3) on each candidate + heuristic tie-breaking, pick the best
 ```
 
 ---

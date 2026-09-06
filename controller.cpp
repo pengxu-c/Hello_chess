@@ -31,7 +31,7 @@ GameController::~GameController() {
 Player* GameController::createPlayer(int choice) {
     switch (choice) {
         case 1: return new HumanPlayer(*ui_);
-        case 2: return new GreedyScoringAI(0.0, "EasyJudge");         // 纯防守
+        case 2: return new EasyJudgeAI();                             // 随机 + 堵（最简陪练）
         case 3: return new GreedyScoringAI(0.0, "PureGreed 1.0");     // 纯防守
         case 4: return new GreedyScoringAI(0.9, "PureGreed 1.1");     // 攻防
         case 5: return new MinimaxPP(judge_);
@@ -52,14 +52,6 @@ void GameController::recreatePlayers(int p1Type, int p2Type) {
     player2_ = createPlayer(p2Type);
 }
 
-// 询问是否返回主菜单：读取一行，返回 true 当且仅当用户输入 y/Y；
-// 输入失败或非 y/Y 时返回 false（调用方据此决定 break/continue，保持原控制流）
-bool GameController::askReturnToMenu() {
-    printf("Return to main menu? (y/n): ");
-    char buf[16];
-    if (!fgets(buf, sizeof(buf), stdin)) return false;
-    return buf[0] == 'y' || buf[0] == 'Y';
-}
 
 // 按 boardSize_ 计算网格像素与偏移，使棋盘居中 960×600 窗口
 // 用局部变量计算后通过 ui_->setLayout 设置到 UI 成员（不再写全局）
@@ -371,11 +363,11 @@ void GameController::run() {
                 resumeLoaded = loadResumeMenu();
             } else if (sc == 3) {
                 replayMenu();
-                if (!askReturnToMenu()) break;
+
                 continue;
             } else if (sc == 4) {
                 storage_.printGlobalStats();
-                if (!askReturnToMenu()) break;
+
                 continue;
             }
         }
@@ -400,8 +392,6 @@ void GameController::run() {
         }
 
         ui_->close();
-
-        // 窗口已关，控制台询问是否回到主菜单重新选择棋手
-        if (!askReturnToMenu()) break;
+        return;   // 对局结束（"再来一局"选否），直接退出程序
     }
 }

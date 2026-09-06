@@ -155,6 +155,7 @@ Choose player 2 (White, second) type number:   ← 玩家 2，执白后手
 | | `scanLine` | 公共 inline 线段扫描核，供 Judge 与各 AI 共用 |
 | | `Stats` | 数据统计（双方步数） |
 | `ui.h/.cpp` | `UI` | **封装全部 EasyX 调用**，持有布局参数（gridSize/xOffset/yOffset/boardSize） |
+| `threat.h/.cpp` | `ThreatDetector` | **必胜/必防威胁检测**：成连位计数、1/2 步必胜、必防、双活三创建位，供各 AI 复用 |
 | `player.h/.cpp` | `Player` | 棋手抽象基类 |
 | | `HumanPlayer` | 人类，派生自 Player |
 | | `GreedyScoringAI` | **通用评分 AI**，攻防权重参数化，一次实现覆盖多档难度 |
@@ -168,7 +169,7 @@ Choose player 2 (White, second) type number:   ← 玩家 2，执白后手
 ### 类关系
 
 - **全局可变状态已消除**：棋盘尺寸/连珠数由 `Board` 成员持有，布局参数由 `UI` 成员持有，支持多棋盘并存、易于测试。
-- `scanLine`（core.h inline）为统一线段统计核，`Judge::checkWin` 与 player.cpp 的评分/威胁检测共用，单一实现。
+- `scanLine`（core.h inline）为统一线段统计核，`Judge::checkWin`、`ThreatDetector`（threat.cpp）与 player.cpp 的 `pointScore` 共用，单一实现。
 - `Player` 为抽象基类，各棋手**派生**自它，统一 `place()` 接口；`GreedyScoringAI` 通过构造参数实例化不同难度档，新增档位无需改类。
 - `GameController` **组合** `Board`/`Judge`/`Stats`/`StorageManager`（值语义）与 `UI*`、两个 `Player*`（堆，析构释放）。
 - `StorageManager` 独立管理持久化：接口分离、`StorageConfig` 配置驱动、`key=value` 格式可扩展、命令模式可扩展新命令、前置声明减少耦合。
@@ -176,7 +177,7 @@ Choose player 2 (White, second) type number:   ← 玩家 2，执白后手
 
 ### Minimax++ 设计要点
 
-极小化极大搜索 + Alpha-Beta 剪枝（深度 4，`player.h` 顶部 `kDepth` 可调），配合：启发式排序、Zobrist 置换表、静态缓冲、`segValue` 统一评分表、邻域扫描（radius=2）、O(1) 判满。决策流程：必胜类接管（1/2 步必胜）→ 堵对方一步成连 → 防守候选取并集（活三/活四 ∪ 眠四/冲四）→ 候选 minimax 选最优。越浅层获胜分越多，优先最快取胜路径。
+极小化极大搜索 + Alpha-Beta 剪枝（深度 4，`player.h` 顶部 `kDepth` 可调），配合：启发式排序、Zobrist 置换表、静态缓冲、`segValue` 统一评分表、邻域扫描（radius=2）、O(1) 判满。决策流程：必胜/必防层级（`ThreatDetector`）→ 己方1步必胜 → 堵对方1步成连 → 己方2步必胜 → 防守候选取并集（对方2步必胜第一步位 ∪ 双活三创建位）→ 候选 minimax 选最优。越浅层获胜分越多，优先最快取胜路径。
 
 ### 目录结构
 

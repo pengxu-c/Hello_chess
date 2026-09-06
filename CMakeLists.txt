@@ -28,6 +28,7 @@ set(SOURCE_FILES
     core.cpp
     ui.cpp
     player.cpp
+    threat.cpp
     ai_config.cpp
     ai_player.cpp
     controller.cpp

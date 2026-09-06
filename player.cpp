@@ -1,18 +1,22 @@
 // ============================================================
 // player.cpp - 棋手类实现
 // HumanPlayer / GreedyScoringAI / MinimaxPP
+// 必胜/必防威胁检测统一由 ThreatDetector（threat.h/.cpp）提供，
+// 本文件仅保留：评分核(segValue/pointScore)、候选选择器、各 AI 决策流程。
 // ============================================================
 #include "player.h"
+#include "threat.h"
 #include "ui.h"
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <random>
 
-// ==================== 单一评分核 + 单点核 + 必胜类 + 禁用机制 + 选择器 ====================
+// ==================== 评分核 + 候选选择器 ====================
 //
-// 评分系统设计目的：消除旧 crit1/crit2/crit3/crit4_mix 的重复计数与量纲混用，
-// 保证主要威胁(一步必防位)分数严格高于次要威胁(活三发展位)，搜索主导 Minimax++。
+// 评分系统职责：把"某一个空位对双方的威胁/价值"量化为分数，供贪心 AI
+// 与 Minimax++ 的启发式排序/打破平局使用。必胜/必防的判定不在评分层，
+// 而由 ThreatDetector 精确给出（避免把"必防"埋进分数里导致量纲混乱）。
 //
 // 单一评分核 segValue(count, openEnds, winLen)：几何级数梯度，对任意 winLen(>=4) 成立。
 //   count=连续同色长度, openEnds=两端开放数(0/1/2), winLen=连珠获胜数。返回该线段威胁度：
@@ -25,7 +29,7 @@
 //
 // 单点核 pointScore(board,r,c,color,maxCap)：模拟在 (r,c) 落 color 子后，沿 4 方向
 //   找最大连续+开放，取最大 segValue，并用 maxCap 截断。调用后恢复棋盘。
-//   攻防同函数，color 传 me 或 opp 即可。取代旧 crit1/crit2/crit3 三个重叠函数。
+//   攻防同函数，color 传 me 或 opp 即可。
 //
 // 各 AI 攻防权重（清晰单一）：
 //   EasyJudge  = 防守
@@ -33,11 +37,7 @@
 //   PG 1.1     = 防守 + 0.9*进攻
 //   Minimax++  = 搜索主导 + 启发式(/1000)打破平局
 //
-// 必胜类：1步必胜(自己成连) + 2步必胜(下m后>=2个成连点)，所有AI优先调用。
-// 对方一步成连检测 findOppOneStepWin：必胜类之后、禁用机制之前，优先堵对方一步成连位
-//   （解决 must 内"成n连位"与"成n-1连位"被 maxCap 截断同分的问题）。
-// 禁用机制：对方活(winLen-2)连及以上时禁随机，只在必防位置精确选。
-// 随机机制：top3 + 极窄区间随机。
+// 随机机制：top3 + 极窄区间随机（开关 Player::randomEnabled，默认关闭）。
 // --------------------------------------------------------------------
 
 struct ScoredMove { int score, r, c; };
@@ -60,15 +60,10 @@ static int segValue(int count, int openEnds, int winLen) {
     return live ? base : base / 10;           // 眠棋 = 活棋 / 10
 }
 
-// ---- 统一线段扫描核 ----
-// LineInfo 与 scanLine 已提升至 core.h 作为公共 inline 函数，
-// 供 Judge::checkWin 与本文件的 inlineCheckN/pointScore/findOppCriticalThreats 共用，
-// 彻底消除两套独立的连珠统计实现（原 Judge::checkLine 与 player.cpp 手写双向计数）。
-
 // 单点核：模拟在 (r,c) 落 color 子后，沿 4 方向找最大连续+开放，取最大 segValue。
 // maxCap 为上限截断（控制不同 AI 的量纲，如 150 或 1000000）。调用后恢复棋盘。
 // 攻防同函数，color 传 me 或 opp 即可。winLen 取自 board.winLen()。
-// 重构：沿 4 方向调 scanLine 统一统计连续同色+开放端，消除手写计数循环。
+// 沿 4 方向调 scanLine 统一统计连续同色+开放端，消除手写计数循环。
 static int pointScore(Board& board, int r, int c, ChessType color, int maxCap) {
     int winLen = board.winLen();
     board.set(r, c, color);
@@ -82,158 +77,6 @@ static int pointScore(Board& board, int r, int c, ChessType color, int maxCap) {
     board.set(r, c, ChessType::None);
     if (best > maxCap) best = maxCap;       // 上限截断
     return best;
-}
-
-// 独立连珠检查：在 (r,c) 落 color 子后是否形成 n 连（不依赖 Judge）
-// 重构：对 4 方向调 scanLine，若任一方向 count >= n 返回 true，消除手写双向计数循环。
-static bool inlineCheckN(const Board& board, int r, int c, ChessType color, int n) {
-    int dr[] = {0, 1, 1, 1}, dc[] = {1, 0, 1, -1};
-    for (int d = 0; d < 4; d++) {
-        if (scanLine(board, r, c, dr[d], dc[d], color).count >= n) return true;
-    }
-    return false;
-}
-
-// ==================== 公共空位扫描工具 ====================
-// 统一"遍历候选空位 → 临时落 color 子 → 判定 → 恢复"骨架，
-// 判定由 pred(board, r, c) 提供（此时该格已临时落子），命中即返回，减少重复循环。
-// 候选范围由调用方传入（通常为 collectNearbyEmpties 的邻域空位集合），
-// 避免全盘 O(N²) 扫描——绝大多数空位远离已有棋子，模拟毫无意义。
-
-// 在给定候选空位中找首个命中（用于"一步成连""一步必胜"等首个命中即返回的场景）
-template <typename Pred>
-static Pos firstHitAmong(Board& board, ChessType color, const std::vector<Pos>& cands, Pred pred) {
-    for (const auto& p : cands) {
-        if (board.at(p.r, p.c) != ChessType::None) continue;   // 防御性：候选可能已过期
-        board.set(p.r, p.c, color);
-        bool hit = pred(board, p.r, p.c);
-        board.set(p.r, p.c, ChessType::None);
-        if (hit) return p;
-    }
-    return { -1, -1 };
-}
-
-// 同上，但收集所有命中空位（用于"必防位""威胁点"列举）
-template <typename Pred>
-static std::vector<Pos> collectHitsAmong(Board& board, ChessType color, const std::vector<Pos>& cands, Pred pred) {
-    std::vector<Pos> res;
-    for (const auto& p : cands) {
-        if (board.at(p.r, p.c) != ChessType::None) continue;
-        board.set(p.r, p.c, color);
-        if (pred(board, p.r, p.c)) res.push_back(p);
-        board.set(p.r, p.c, ChessType::None);
-    }
-    return res;
-}
-
-// 收集已有棋子周围 radius 内的空位（去重），用于限定威胁检测范围。
-// 正确性论证：对方一步成连位必然紧邻已有棋子（连珠需连续，winLen-1 个已有棋子紧邻新落子）；
-//   活三/活四威胁位同理紧邻已有棋子；2步必胜第一步若远离已有棋子(距离>2)，则其落子不创造
-//   新成连点（成连点原本就在，已被 win1 检测），矛盾。故 radius=2 保守覆盖所有真实威胁，
-//   不改变检测结果。性能：将 O(N²) 全盘扫描收窄为 O(已有棋子数 × radius²)。
-static std::vector<Pos> collectNearbyEmpties(const Board& board, int radius = 2) {
-    std::vector<Pos> res;
-    int n = board.size();
-    std::vector<bool> seen(static_cast<size_t>(n) * n, false);   // 去重标记
-    for (int r = 0; r < n; r++) {
-        for (int c = 0; c < n; c++) {
-            if (board.at(r, c) == ChessType::None) continue;
-            for (int dr = -radius; dr <= radius; dr++) {
-                for (int dc = -radius; dc <= radius; dc++) {
-                    int nr = r + dr, nc = c + dc;
-                    if (board.inBounds(nr, nc) && board.at(nr, nc) == ChessType::None) {
-                        size_t idx = static_cast<size_t>(nr) * n + nc;
-                        if (!seen[idx]) { seen[idx] = true; res.push_back({nr, nc}); }
-                    }
-                }
-            }
-        }
-    }
-    return res;
-}
-
-// 对方一步成连检测：哪格落 opp 立刻成 winLen 连即返回（必须立即堵）。
-// winLen 取自 board.winLen()。限定邻域扫描：一步成连位必然紧邻已有棋子。
-static Pos findOppOneStepWin(Board& board, ChessType opp) {
-    int winLen = board.winLen();
-    auto cands = collectNearbyEmpties(board, 2);
-    return firstHitAmong(board, opp, cands,
-        [opp, winLen](const Board& b, int r, int c) { return inlineCheckN(b, r, c, opp, winLen); });
-}
-
-// 对方关键威胁检测：遍历空位模拟对方落子，若在某方向形成
-//   活(winLen-1)连(活四,两端开放) 或 活(winLen-2)连(活三,两端开放)
-// 则该位置是必防点。活四:对方下一步任一端成n,必须立即堵此点本身。
-// 活三:对方下一步任一端成活四(双威胁),必须立即堵此点本身或活三端点。
-// 返回所有此类威胁位置作为精确候选。对任意 winLen>=4 成立。
-// 解决旧 findMustDefend 不区分活/眠且不检测活 n-2 的缺陷。
-// 重构：对 4 方向调 scanLine 统一统计连续同色+开放端，消除手写计数循环；
-//   限定邻域扫描：活三/活四威胁位必然紧邻已有棋子。
-static std::vector<Pos> findOppCriticalThreats(Board& board, ChessType opp) {
-    int winLen = board.winLen();
-    int threshold = winLen - 2;   // 威胁阈值：检测活 n-2（如活三）及以上威胁
-    auto cands = collectNearbyEmpties(board, 2);
-    return collectHitsAmong(board, opp, cands, [threshold, winLen](const Board& b, int r, int c) {
-        ChessType col = b.at(r, c);   // 此时 (r,c) 已被 set 为 opp
-        int dr[] = {0, 1, 1, 1}, dc[] = {1, 0, 1, -1};
-        for (int d = 0; d < 4; d++) {
-            LineInfo li = scanLine(b, r, c, dr[d], dc[d], col);
-            // 活棋(两端开放)且连数>=阈值且未成连
-            if (li.openStart && li.openEnd && li.count >= threshold && li.count < winLen) return true;
-        }
-        return false;
-    });
-}
-
-// 必胜类：1步必胜(自己成连) + 2步必胜(下m后>=2个成连点，对方堵一个还有另一个)
-// 所有 AI 在 place() 开头调用，检测到必胜直接返回，保证两步内获胜。
-// winLen/尺寸均取自 board，消除全局依赖。
-// 重构：1步必胜与2步必胜均限定邻域扫描。
-//   - 1步必胜：成连位必然紧邻已有棋子。
-//   - 2步必胜第一步：若远离已有棋子(距离>2)，其落子不创造新成连点（成连点原本就在，
-//     已被 win1 检测），矛盾；故第一步必然在已有棋子邻域。
-//   - 内层成连点：紧邻已有棋子（含刚落的第一步），限定邻域。
-static Pos findWinMove(Board& board, ChessType color) {
-    int winLen = board.winLen();
-    // 1步必胜：落子即成 winLen 连。成连位必然紧邻已有棋子，限定邻域。
-    auto cands1 = collectNearbyEmpties(board, 2);
-    Pos win1 = firstHitAmong(board, color, cands1,
-        [color, winLen](const Board& b, int r, int c) { return inlineCheckN(b, r, c, color, winLen); });
-    if (win1.r >= 0) return win1;
-    // 2步必胜：下 m 后自己有 >=2 个一次成连点，且对方无 1 步成连反制
-    ChessType opp = opponent(color);
-    auto candsOuter = collectNearbyEmpties(board, 2);   // 第一步必然在已有棋子邻域
-    for (const auto& p : candsOuter) {
-        board.set(p.r, p.c, color);
-        // 内层找成连点：成连位必然紧邻已有棋子（含刚落的 p），限定邻域
-        auto candsInner = collectNearbyEmpties(board, 2);
-        int winSpots = 0;
-        for (const auto& p2 : candsInner) {
-            if (board.at(p2.r, p2.c) != ChessType::None) continue;
-            board.set(p2.r, p2.c, color);
-            if (inlineCheckN(board, p2.r, p2.c, color, winLen)) winSpots++;
-            board.set(p2.r, p2.c, ChessType::None);
-            if (winSpots >= 2) break;          // 已找到 2 个成连点，提前退出
-        }
-        if (winSpots >= 2) {
-            // 对方下一步直接成连则我方 2 步必胜不成立，必须同时无此反制
-            Pos oppCounter = findOppOneStepWin(board, opp);
-            if (oppCounter.r < 0) { board.set(p.r, p.c, ChessType::None); return p; }
-        }
-        board.set(p.r, p.c, ChessType::None);
-    }
-    return {-1, -1};
-}
-
-// 禁用机制：模拟对方在每个空位落子，若形成 (winLen-1) 连则该位置必防。
-// 与 EasyJudge 同理，能识别连续、跳棋等所有威胁模式。
-// 限定邻域扫描：(winLen-1) 连位必然紧邻已有棋子。
-static std::vector<Pos> findMustDefend(Board& board, ChessType opp) {
-    int winLen = board.winLen();
-    auto cands = collectNearbyEmpties(board, 2);
-    return collectHitsAmong(board, opp, cands, [opp, winLen](const Board& b, int r, int c) {
-        return inlineCheckN(b, r, c, opp, winLen - 1);
-    });
 }
 
 // 随机机制开关（默认关闭，关闭时 pickBestMove 退化为选最高分）
@@ -278,18 +121,91 @@ bool HumanPlayer::isHuman() const { return true; }
 bool HumanPlayer::needsDelay() const { return false; }
 const char* HumanPlayer::name() const { return "Human"; }
 
+// ---- 去重：删除候选集中重复的位置（随机选前消除重复，保持均匀权重）----
+static void dedupPos(std::vector<Pos>& v) {
+    std::vector<Pos> out;
+    for (const auto& p : v) {
+        bool seen = false;
+        for (const auto& q : out) if (q.r == p.r && q.c == p.c) { seen = true; break; }
+        if (!seen) out.push_back(p);
+    }
+    v = out;
+}
+
+// ---- 在 color 棋子周围 radius 内随机选空位；无空位则退化为全盘随机空位 ----
+static Pos randomNear(const Board& board, ChessType color, int radius = 2) {
+    std::vector<Pos> empties;
+    int n = board.size();
+    std::vector<bool> seen(static_cast<size_t>(n) * n, false);
+    for (int r = 0; r < n; r++)
+        for (int c = 0; c < n; c++) {
+            if (board.at(r, c) != color) continue;
+            for (int dr = -radius; dr <= radius; dr++)
+                for (int dc = -radius; dc <= radius; dc++) {
+                    int nr = r + dr, nc = c + dc;
+                    if (board.inBounds(nr, nc) && board.at(nr, nc) == ChessType::None) {
+                        size_t idx = static_cast<size_t>(nr) * n + nc;
+                        if (!seen[idx]) { seen[idx] = true; empties.push_back({ nr, nc }); }
+                    }
+                }
+        }
+    if (!empties.empty()) return empties[rand() % empties.size()];
+    // 退化：对方棋子附近无空位（或对方尚未落子），全盘空位随机
+    for (int r = 0; r < n; r++)
+        for (int c = 0; c < n; c++)
+            if (board.at(r, c) == ChessType::None) empties.push_back({ r, c });
+    if (empties.empty()) return { -1, -1 };
+    return empties[rand() % empties.size()];
+}
+
+// ---------- EasyJudgeAI：随机 + 堵（最简 AI）----------
+// 唯一决策依据是 ThreatDetector 的必胜/必防候选，不评分、不全盘搜索：
+//   1) 己方 1 步 / 2 步必胜 → 直接下（能赢就赢，不随机）
+//   2) 必防候选（对方 1 步成连 + 对方 2 步必胜第一步位 + 双活三创建位）去重后随机选一个
+//   3) 无威胁 → 对方棋子附近随机落子
+Pos EasyJudgeAI::place(Board& board, ChessType color) {
+    ChessType opp = opponent(color);
+    ThreatDetector td(board);
+
+    // 1) 己方必胜：直接下
+    Pos win1 = td.oneStepWin(color);
+    if (win1.valid()) return win1;
+    Pos win2 = td.twoStepWin(color, opp);
+    if (win2.valid()) return win2;
+
+    // 2) 必防候选：对方 1 步成连 + 对方 2 步必胜第一步位 + 双活三创建位
+    std::vector<Pos> cands;
+    Pos b1 = td.oneStepWin(opp);
+    if (b1.valid()) cands.push_back(b1);
+    for (const auto& p : td.mustBlockTwo(opp))         cands.push_back(p);
+    for (const auto& p : td.mustBlockDoubleThree(opp)) cands.push_back(p);
+    dedupPos(cands);
+    if (!cands.empty()) return cands[rand() % cands.size()];
+
+    // 3) 无威胁：对方棋子附近随机
+    return randomNear(board, opp);
+}
+bool EasyJudgeAI::isHuman() const { return false; }
+bool EasyJudgeAI::needsDelay() const { return true; }
+const char* EasyJudgeAI::name() const { return "EasyJudge"; }
+
 // ---------- GreedyScoringAI：统一攻防评分 AI ----------
 // 一个实现覆盖任意难度档：attackWeight=0 纯防守（EasyJudge/PG1.0），>0 加入进攻（PG1.1）
 GreedyScoringAI::GreedyScoringAI(double attackWeight, const char* displayName)
     : attackWeight_(attackWeight), name_(displayName) {}
 
-// 决策流程：必胜类 → 对方一步成连 → 关键威胁 → 必防位 → 全盘扫描（均带进攻权重）
+// 决策流程（威胁层级由高到低，均复用 ThreatDetector）：
+//   己方1步必胜 → 对方1步成连 → 己方2步必胜 → 对方2步必胜第一步位 → 对方双活三创建位 → 常规评分
 Pos GreedyScoringAI::place(Board& board, ChessType color) {
     ChessType opp = opponent(color);
-    Pos win = findWinMove(board, color);
-    if (win.r >= 0) return win;
-    Pos oppWin = findOppOneStepWin(board, opp);
-    if (oppWin.r >= 0) return oppWin;
+    ThreatDetector td(board);
+
+    Pos win1 = td.oneStepWin(color);
+    if (win1.valid()) return win1;
+    Pos blk1 = td.oneStepWin(opp);
+    if (blk1.valid()) return blk1;
+    Pos win2 = td.twoStepWin(color, opp);
+    if (win2.valid()) return win2;
 
     // 统一单点火评估：防守(对方价值) + 进攻权重*己方价值，maxCap 控制量纲
     auto scoreAt = [&](int r, int c, int maxCap) {
@@ -300,22 +216,25 @@ Pos GreedyScoringAI::place(Board& board, ChessType color) {
         return defense + offense;
     };
 
-    // 对方活n-1/活n-2威胁：精确候选，大maxCap区分威胁等级
-    auto critical = findOppCriticalThreats(board, opp);
-    if (!critical.empty()) {
+    // 对方 2 步必胜第一步位（活三两端等）：高优先级必防，大 maxCap 区分威胁等级
+    auto blockTwo = td.mustBlockTwo(opp);
+    if (!blockTwo.empty()) {
         std::vector<ScoredMove> cs;
-        for (auto& m : critical) cs.push_back({scoreAt(m.r, m.c, 1000000), m.r, m.c});
+        for (auto& m : blockTwo) cs.push_back({scoreAt(m.r, m.c, 1000000), m.r, m.c});
         return pickBestNoRandom(cs);
     }
 
-    auto must = findMustDefend(board, opp);
-    std::vector<ScoredMove> scored;
-    if (!must.empty()) {
-        for (auto& m : must) scored.push_back({scoreAt(m.r, m.c, 150), m.r, m.c});
-        return pickBestNoRandom(scored);
+    // 对方双活三创建位：次高优先级必防（3 步必防）
+    auto blockThree = td.mustBlockDoubleThree(opp);
+    if (!blockThree.empty()) {
+        std::vector<ScoredMove> cs;
+        for (auto& m : blockThree) cs.push_back({scoreAt(m.r, m.c, 1000000), m.r, m.c});
+        return pickBestNoRandom(cs);
     }
 
+    // 常规全盘扫描：防守 + 进攻权重评分
     int n = board.size();
+    std::vector<ScoredMove> scored;
     for (int i = 0; i < n; i++)
         for (int j = 0; j < n; j++) {
             if (board.at(i, j) != ChessType::None) continue;
@@ -488,42 +407,44 @@ int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
     return best;
 }
 
-// 顶层决策：必胜类 → 对方一步成连 → 合并防守候选(取并集) → 搜索主导 + 启发式打破平局
+// 顶层决策：必胜/必防层级（ThreatDetector）→ 合并防守候选 → 搜索主导 + 启发式打破平局
 //   评分 = minimax_val(±kInf=±1e8) + (pointScore(me,1e6) + pointScore(opp,1e6)) / 1000
 //   搜索主导：minimax_val(±1e8) 占绝对主导，启发式项(/1000)仅在搜索分不出高低时打破平局。
-// 防守候选合并：critical(活三/活四威胁) ∪ must(眠四/冲四必防) 取并集，
-//   修复旧版"互斥选择"导致同时存在活三与眠四时只防活三、被眠四连五杀的致命漏洞。
+// 防守候选合并：对方2步必胜第一步位 ∪ 双活三创建位 取并集，
+//   修复旧版"互斥选择"导致同时存在活三与眠四时只防其一、被另一个连杀的问题。
 Pos MinimaxPP::place(Board& board, ChessType color) {
     ChessType opp = opponent(color);
 
     if (!zobristInited_) { initZobrist(); zobristInited_ = true; }
     transTable_.clear();                                    // 每次顶层决策重置置换表
 
-    // 0) 必胜类：1步或2步必胜
-    Pos win = findWinMove(board, color);
-    if (win.r >= 0) return win;
+    ThreatDetector td(board);
 
-    // 0.5) 对方一步成连：必须立即堵
-    Pos oppWin = findOppOneStepWin(board, opp);
-    if (oppWin.r >= 0) return oppWin;
+    // 1) 己方 1 步必胜  2) 对方 1 步成连（必须立即堵）  3) 己方 2 步必胜
+    Pos win1 = td.oneStepWin(color);
+    if (win1.valid()) return win1;
+    Pos blk1 = td.oneStepWin(opp);
+    if (blk1.valid()) return blk1;
+    Pos win2 = td.twoStepWin(color, opp);
+    if (win2.valid()) return win2;
 
     auto moves = generateMoves(board);
     if (moves.empty()) return { -1, -1 };
 
-    // 0.7) 合并防守候选：活三/活四威胁(critical) + 眠四/冲四必防(must)，取并集去重
-    auto critical = findOppCriticalThreats(board, opp);
-    auto must = findMustDefend(board, opp);
+    // 合并防守候选：对方2步必胜第一步位 + 双活三创建位，取并集去重
+    auto blockTwo = td.mustBlockTwo(opp);
+    auto blockThree = td.mustBlockDoubleThree(opp);
     std::vector<Pos> defenseMoves;
     {
         static bool seen[kMaxBoard][kMaxBoard];
         int n = board.size();
         for (int r = 0; r < n; r++) for (int c = 0; c < n; c++) seen[r][c] = false;
-        for (auto& p : critical) if (!seen[p.r][p.c]) { seen[p.r][p.c] = true; defenseMoves.push_back(p); }
-        for (auto& p : must)     if (!seen[p.r][p.c]) { seen[p.r][p.c] = true; defenseMoves.push_back(p); }
+        for (auto& p : blockTwo)   if (!seen[p.r][p.c]) { seen[p.r][p.c] = true; defenseMoves.push_back(p); }
+        for (auto& p : blockThree) if (!seen[p.r][p.c]) { seen[p.r][p.c] = true; defenseMoves.push_back(p); }
     }
     const auto& cands = !defenseMoves.empty() ? defenseMoves : moves;
 
-    // 1) 搜索主导 + 启发式打破平局
+    // 搜索主导 + 启发式打破平局
     uint64_t baseHash = boardHash(board);
     int colorIdxMe = (color == ChessType::Black) ? 0 : 1;
     std::vector<ScoredMove> scored;

@@ -48,7 +48,7 @@ private:
     friend class Judge;         // Judge 直接访问 map_ 进行判定
 };
 
-// ---- 统一线段扫描核（供 Judge::checkWin 与 player.cpp 的 inlineCheckN/pointScore 共用）----
+// ---- 统一线段扫描核（供 Judge::checkWin、threat.cpp 的 ThreatDetector、player.cpp 的 pointScore 共用）----
 // 消除两套独立的连珠统计实现：原 Judge::checkLine（offset 回退法）与 player.cpp 的手写双向计数。
 struct LineInfo { int count; bool openStart; bool openEnd; };
 // 统计经过 (r,c) 沿方向 (dr,dc) 的连续 color 线段。

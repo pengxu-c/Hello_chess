@@ -31,7 +31,7 @@ private:
 
     Player* createPlayer(int choice);   // 按编号创建棋手
     void recreatePlayers(int p1Type, int p2Type);  // 释放旧玩家并按编号创建新玩家
-    bool askReturnToMenu();             // 询问是否返回主菜单，返回 true=是 false=否/输入失败
+
     void configureRules();              // 终端配置棋盘尺寸与连珠数 + 存储开关
     void selectPlayers();               // 终端选择双方棋手
     void playOneGame();                 // 进行一局对战

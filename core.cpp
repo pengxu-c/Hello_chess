@@ -67,7 +67,7 @@ bool Board::inBounds(int r, int c) const {
 // 检查最后落子 last 是否使 color 方形成连珠（连数取自 b.winLen()）。
 // 复用 scanLine 统一线段统计核：对 4 方向统计经过 last 的连续同色长度，
 // 任一方向 count >= winLen 即成连。消除原 checkLine（offset 回退法）的独立实现，
-// 与 player.cpp 的 inlineCheckN 共用同一套连珠判定逻辑。
+// 与 threat.cpp 的 ThreatDetector 共用同一套连珠判定逻辑。
 bool Judge::checkWin(const Board& b, Pos last, ChessType color) const {
     if (!last.valid()) return false;
     int winLen = b.winLen();
