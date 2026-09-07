@@ -50,19 +50,28 @@ private:
 
 // ---- 统一线段扫描核（供 Judge::checkWin、threat.cpp 的 ThreatDetector、player.cpp 的 pointScore 共用）----
 // 消除两套独立的连珠统计实现：原 Judge::checkLine（offset 回退法）与 player.cpp 的手写双向计数。
-struct LineInfo { int count; bool openStart; bool openEnd; };
+struct LineInfo {
+    int count;          // 连续同色长度（含 (r,c) 本身）
+    bool openStart;     // 反向端紧邻是否为空（越界或异色视为不开放）
+    bool openEnd;       // 正向端紧邻是否为空
+    int pr, pc;         // 反向端点坐标（反向连续延伸后第一个非 color 的位置）
+    int nr, nc;         // 正向端点坐标（正向连续延伸后第一个非 color 的位置）
+};
 // 统计经过 (r,c) 沿方向 (dr,dc) 的连续 color 线段。
 // count 包含 (r,c) 本身（调用方需保证 (r,c) 已是 color 或先 set）；
-// openStart/openEnd 表示两端紧邻是否为空位（越界或异色视为不开放）。
+// openStart/openEnd 表示两端紧邻是否为空位（越界或异色视为不开放）；
+// pr/pc、nr/nc 为两端坐标，供威胁检测计算"端点再外一格是否仍空"（判真活三）。
 inline LineInfo scanLine(const Board& board, int r, int c, int dr, int dc, ChessType color) {
-    LineInfo info{1, false, false};
+    LineInfo info{1, false, false, 0, 0, 0, 0};
     // 正方向延伸
     int nr = r + dr, nc = c + dc;
     while (board.inBounds(nr, nc) && board.at(nr, nc) == color) { info.count++; nr += dr; nc += dc; }
+    info.nr = nr; info.nc = nc;
     info.openEnd = board.inBounds(nr, nc) && board.at(nr, nc) == ChessType::None;
     // 反方向延伸
     int pr = r - dr, pc = c - dc;
     while (board.inBounds(pr, pc) && board.at(pr, pc) == color) { info.count++; pr -= dr; pc -= dc; }
+    info.pr = pr; info.pc = pc;
     info.openStart = board.inBounds(pr, pc) && board.at(pr, pc) == ChessType::None;
     return info;
 }

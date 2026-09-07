@@ -52,7 +52,7 @@ static int segValue(int count, int openEnds, int winLen) {
     int base;
     switch (diff) {
         case 1:  base = 100000; break;        // 活四/冲四
-        case 2:  base =  10000; break;        // 活三/眠三
+        case 2:  base =  50000; break;        // 活三/眠三
         case 3:  base =   1000; break;        // 活二/眠二
         case 4:  base =    100; break;        // 活一/眠一
         default: base =     10; break;        // diff >= 5
@@ -173,12 +173,11 @@ Pos EasyJudgeAI::place(Board& board, ChessType color) {
     Pos win2 = td.twoStepWin(color, opp);
     if (win2.valid()) return win2;
 
-    // 2) 必防候选：对方 1 步成连 + 对方 2 步必胜第一步位 + 双活三创建位
+    // 2) 必防候选：对方 1 步成连 + 对方强制胜第一步位（mustDefend），随机选一个
     std::vector<Pos> cands;
     Pos b1 = td.oneStepWin(opp);
     if (b1.valid()) cands.push_back(b1);
-    for (const auto& p : td.mustBlockTwo(opp))         cands.push_back(p);
-    for (const auto& p : td.mustBlockDoubleThree(opp)) cands.push_back(p);
+    for (const auto& p : td.mustDefend(opp)) cands.push_back(p);
     dedupPos(cands);
     if (!cands.empty()) return cands[rand() % cands.size()];
 
@@ -195,7 +194,7 @@ GreedyScoringAI::GreedyScoringAI(double attackWeight, const char* displayName)
     : attackWeight_(attackWeight), name_(displayName) {}
 
 // 决策流程（威胁层级由高到低，均复用 ThreatDetector）：
-//   己方1步必胜 → 对方1步成连 → 己方2步必胜 → 对方2步必胜第一步位 → 对方双活三创建位 → 常规评分
+//   己方1步必胜 → 对方1步成连 → 己方2步必胜 → 对方强制胜第一步位 → 常规评分
 Pos GreedyScoringAI::place(Board& board, ChessType color) {
     ChessType opp = opponent(color);
     ThreatDetector td(board);
@@ -216,19 +215,11 @@ Pos GreedyScoringAI::place(Board& board, ChessType color) {
         return defense + offense;
     };
 
-    // 对方 2 步必胜第一步位（活三两端等）：高优先级必防，大 maxCap 区分威胁等级
-    auto blockTwo = td.mustBlockTwo(opp);
-    if (!blockTwo.empty()) {
+    // 对方强制胜第一步位（活四/双冲四/四三/双活三）：高优先级必防，大 maxCap 区分威胁等级
+    auto defend = td.mustDefend(opp);
+    if (!defend.empty()) {
         std::vector<ScoredMove> cs;
-        for (auto& m : blockTwo) cs.push_back({scoreAt(m.r, m.c, 1000000), m.r, m.c});
-        return pickBestNoRandom(cs);
-    }
-
-    // 对方双活三创建位：次高优先级必防（3 步必防）
-    auto blockThree = td.mustBlockDoubleThree(opp);
-    if (!blockThree.empty()) {
-        std::vector<ScoredMove> cs;
-        for (auto& m : blockThree) cs.push_back({scoreAt(m.r, m.c, 1000000), m.r, m.c});
+        for (auto& m : defend) cs.push_back({scoreAt(m.r, m.c, 1000000), m.r, m.c});
         return pickBestNoRandom(cs);
     }
 
@@ -410,8 +401,8 @@ int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
 // 顶层决策：必胜/必防层级（ThreatDetector）→ 合并防守候选 → 搜索主导 + 启发式打破平局
 //   评分 = minimax_val(±kInf=±1e8) + (pointScore(me,1e6) + pointScore(opp,1e6)) / 1000
 //   搜索主导：minimax_val(±1e8) 占绝对主导，启发式项(/1000)仅在搜索分不出高低时打破平局。
-// 防守候选合并：对方2步必胜第一步位 ∪ 双活三创建位 取并集，
-//   修复旧版"互斥选择"导致同时存在活三与眠四时只防其一、被另一个连杀的问题。
+// 防守候选合并：对方强制胜第一步位（mustDefend，覆盖活四/双冲四/四三/双活三），
+//   修复旧版"互斥选择"导致同时存在多威胁时只防其一、被另一个连杀的问题。
 Pos MinimaxPP::place(Board& board, ChessType color) {
     ChessType opp = opponent(color);
 
@@ -431,17 +422,8 @@ Pos MinimaxPP::place(Board& board, ChessType color) {
     auto moves = generateMoves(board);
     if (moves.empty()) return { -1, -1 };
 
-    // 合并防守候选：对方2步必胜第一步位 + 双活三创建位，取并集去重
-    auto blockTwo = td.mustBlockTwo(opp);
-    auto blockThree = td.mustBlockDoubleThree(opp);
-    std::vector<Pos> defenseMoves;
-    {
-        static bool seen[kMaxBoard][kMaxBoard];
-        int n = board.size();
-        for (int r = 0; r < n; r++) for (int c = 0; c < n; c++) seen[r][c] = false;
-        for (auto& p : blockTwo)   if (!seen[p.r][p.c]) { seen[p.r][p.c] = true; defenseMoves.push_back(p); }
-        for (auto& p : blockThree) if (!seen[p.r][p.c]) { seen[p.r][p.c] = true; defenseMoves.push_back(p); }
-    }
+    // 合并防守候选：对方强制胜第一步位（活四/双冲四/四三/双活三），mustDefend 天然去重
+    auto defenseMoves = td.mustDefend(opp);
     const auto& cands = !defenseMoves.empty() ? defenseMoves : moves;
 
     // 搜索主导 + 启发式打破平局
