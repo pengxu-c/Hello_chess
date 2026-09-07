@@ -52,7 +52,7 @@ static int segValue(int count, int openEnds, int winLen) {
     int base;
     switch (diff) {
         case 1:  base = 100000; break;        // 活四/冲四
-        case 2:  base =  50000; break;        // 活三/眠三
+        case 2:  base =  33000; break;        // 活三/眠三
         case 3:  base =   1000; break;        // 活二/眠二
         case 4:  base =    100; break;        // 活一/眠一
         default: base =     10; break;        // diff >= 5
