@@ -131,7 +131,7 @@ Choose player 2 (White, second) type number:   ← 玩家 2，执白后手
 | 4 | PureGreed 1.1 | 攻防评分 |
 | 5 | Minimax++ | αβ 搜索（最强） |
 | 6 | API AI | 远程大模型，需配置 |
-| 7 | Tactical++ | 实验棋手 |
+| 7 | Tactical++ | 实验棋手(它很放得开) |
 
 > 难度名称仅作相对区分，不代表实际棋力。
 
