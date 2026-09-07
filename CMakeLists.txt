@@ -33,6 +33,7 @@ set(SOURCE_FILES
     ai_player.cpp
     controller.cpp
     storage.cpp
+    experimental_tactical_player.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})

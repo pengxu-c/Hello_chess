@@ -7,6 +7,7 @@
 #include "ui.h"
 #include "player.h"
 #include "ai_player.h"
+#include "experimental_tactical_player.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -40,6 +41,7 @@ Player* GameController::createPlayer(int choice) {
             if (aiConfig_.enabled) return new APIPlayer(aiConfig_);
             printf(">> API AI unavailable (config.json missing or incomplete). Falling back to Minimax++.\n");
             return new MinimaxPP(judge_);
+        case 7: return new TacticalPP(judge_);                     // 实验棋手：窗口扫描 + VCF/VCT
         default: return new HumanPlayer(*ui_);
     }
 }
@@ -125,6 +127,7 @@ void GameController::selectPlayers() {
         printf("  6. API AI - %s (remote LLM)\n", aiConfig_.displayName.c_str());
     else
         printf("  6. API AI (unavailable; falls back to Minimax++)\n");
+    printf("  7. [EXPERIMENTAL] Tactical++\n");
     printf("\n");
 
     int c1 = 0, c2 = 0;

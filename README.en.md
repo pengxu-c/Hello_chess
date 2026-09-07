@@ -30,6 +30,7 @@ After startup, choose the player type for **Player 1** and **Player 2** in the c
 | 4 | PureGreed 1.1 | Attack+defense scoring |
 | 5 | Minimax++ | Alpha-beta pruning + heuristic ordering + Zobrist transposition table (strongest) |
 | 6 | API AI | Remote LLM API player (requires `config.json`) |
+| 7 | Tactical++ | Experimental player |
 
 Any combination of the two sides is allowed; **AI vs. AI spectating is supported**. Non-numeric or out-of-range input defaults to the Human player.
 
@@ -144,6 +145,7 @@ chess/
 ├── storage.h / storage.cpp        StorageManager (undo/replay/resumes/stats/commands)
 ├── controller.h / controller.cpp  GameController (rule config + turn scheduling + storage integration)
 ├── main.cpp                       Program entry
+├── experimental_tactical_player.h / .cpp   Experimental player
 ├── CMakeLists.txt                 CMake build script
 ├── cmake-local.cmake              Local EasyX path (ignored by .gitignore)
 └── data/                          Data directory auto-created at runtime
@@ -191,7 +193,7 @@ The build output is `build/Release/Hello_chess.exe`.
 1. Run `Hello_chess.exe`
 2. Configure rules: press Enter directly for the default 15×15 Gomoku, or type `c` to customize
 3. Enable storage: only asked after typing `c` to customize rules; enter `y` to enable memory storage (or `n` to disable; pressing Enter for default rules keeps it off)
-4. Choose the player type for both sides (1-6)
+4. Choose the player type for both sides (1-7)
 5. Start playing:
    - Human players place stones with mouse clicks
    - When storage is enabled, console commands can be typed anytime (`help` lists all commands)

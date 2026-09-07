@@ -92,7 +92,7 @@ Choose player 1 (Black, first) type number:    ← 玩家 1，执黑先手
 Choose player 2 (White, second) type number:   ← 玩家 2，执白后手
 ```
 
-编号 1-6 含义见 [棋手类型](#棋手类型)；输入非数字或越界时默认为人类玩家。选择 6 时若 `config.json` 未配置，自动回退为玩家 5 并在控制台提示。
+编号 1-7 含义见 [棋手类型](#棋手类型)；输入非数字或越界时默认为人类玩家。选择 6 时若 `config.json` 未配置，自动回退为玩家 5 并在控制台提示。
 
 **第 5 步：开始对弈**
 
@@ -131,6 +131,7 @@ Choose player 2 (White, second) type number:   ← 玩家 2，执白后手
 | 4 | PureGreed 1.1 | 攻防评分 |
 | 5 | Minimax++ | αβ 搜索（最强） |
 | 6 | API AI | 远程大模型，需配置 |
+| 7 | Tactical++ | 实验棋手 |
 
 > 难度名称仅作相对区分，不代表实际棋力。
 
@@ -191,6 +192,7 @@ chess/
 ├── storage.h / storage.cpp        StorageManager（悔棋/回访/残局/统计/命令）
 ├── controller.h / controller.cpp  GameController（规则配置 + 回合调度 + 存储集成）
 ├── main.cpp                       程序入口
+├── experimental_tactical_player.h / .cpp   实验棋手
 ├── CMakeLists.txt                 CMake 构建脚本
 ├── cmake-local.cmake              本地 EasyX 路径（已被 .gitignore 忽略）
 └── data/                          运行时自动创建的数据目录
