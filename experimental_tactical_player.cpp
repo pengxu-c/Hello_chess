@@ -470,6 +470,8 @@ std::vector<Pos> TacticalPP::generateMoves(Board& board, ChessType me) {
 }
 
 Pos TacticalPP::place(Board& board, ChessType color) {
+    // 先手首步：棋盘全空即执黑先行，全盘真随机（时间种子），之后走正常决策
+    if (board.isEmpty()) { Pos p = randomFirstMove(board); markLastMove(p); return p; }
     const ChessType me = color, opp = oppOf(color);
     const int w = board.winLen();
 

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <algorithm>
 #include <random>
+#include <chrono>
 
 // ==================== 评分核 + 候选选择器 ====================
 //
@@ -34,7 +35,7 @@
 // 各 AI 攻防权重（清晰单一）：
 //   EasyJudge  = 防守
 //   PG 1.0     = 防守
-//   PG 1.1     = 防守 + 0.9*进攻
+//   PG 1.1     = 防守 + 进攻（攻防权重相同）
 //   Minimax++  = 搜索主导 + 启发式(/1000)打破平局
 //
 // 随机机制：top3 + 极窄区间随机（开关 Player::randomEnabled，默认关闭）。
@@ -81,6 +82,24 @@ static int pointScore(Board& board, int r, int c, ChessType color, int maxCap) {
 
 // 随机机制开关（默认关闭，关闭时 pickBestMove 退化为选最高分）
 bool Player::randomEnabled = false;
+
+// 先手首步随机落子：棋盘全空（AI 执黑先手）时全盘真随机选一个空位。
+// 种子 = 当前时间戳 ^ 硬件熵，保证对局首步不重复、不可预测；
+// 仅第一步调用，之后各步仍走 各 AI 的正常决策（评分/必胜判定/搜索）。
+Pos randomFirstMove(const Board& board) {
+    std::vector<Pos> empties;
+    int n = board.size();
+    for (int r = 0; r < n; r++)
+        for (int c = 0; c < n; c++)
+            if (board.at(r, c) == ChessType::None) empties.push_back({ r, c });
+    if (empties.empty()) return { -1, -1 };
+    unsigned seed = static_cast<unsigned>(
+        std::chrono::steady_clock::now().time_since_epoch().count())
+        ^ std::random_device{}();
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> dist(0, static_cast<int>(empties.size()) - 1);
+    return empties[dist(rng)];
+}
 
 // 不随机：选最高分
 static Pos pickBestNoRandom(std::vector<ScoredMove>& scored) {
@@ -160,18 +179,20 @@ static Pos randomNear(const Board& board, ChessType color, int radius = 2) {
 
 // ---------- EasyJudgeAI：随机 + 堵（最简 AI）----------
 // 唯一决策依据是 ThreatDetector 的必胜/必防候选，不评分、不全盘搜索：
-//   1) 己方 1 步 / 2 步必胜 → 直接下（能赢就赢，不随机）
-//   2) 必防候选（对方 1 步成连 + 对方 2 步必胜第一步位 + 双活三创建位）去重后随机选一个
-//   3) 无威胁 → 对方棋子附近随机落子
+//   1) 己方 1 步必胜 → 直接下（能赢就赢，不随机）
+//   2) 对方威胁（1 步成连 + 强制胜第一步位）→ 先处理，防守优先于己方 2 步必胜：
+//      对方活三放任即活四化强制胜，己方双活三须两步兑现追不上，必须先防
+//   3) 己方 2 步必胜 → 直接下（无对方威胁时才兑现）
+//   4) 无威胁 → 对方棋子附近随机落子
 Pos EasyJudgeAI::place(Board& board, ChessType color) {
+    // 先手首步：棋盘全空即执黑先行，全盘真随机（时间种子），之后走正常决策
+    if (board.isEmpty()) return randomFirstMove(board);
     ChessType opp = opponent(color);
     ThreatDetector td(board);
 
     // 1) 己方必胜：直接下
     Pos win1 = td.oneStepWin(color);
     if (win1.valid()) return win1;
-    Pos win2 = td.twoStepWin(color, opp);
-    if (win2.valid()) return win2;
 
     // 2) 必防候选：对方 1 步成连 + 对方强制胜第一步位（mustDefend），随机选一个
     std::vector<Pos> cands;
@@ -181,7 +202,11 @@ Pos EasyJudgeAI::place(Board& board, ChessType color) {
     dedupPos(cands);
     if (!cands.empty()) return cands[rand() % cands.size()];
 
-    // 3) 无威胁：对方棋子附近随机
+    // 3) 己方 2 步必胜：无对方威胁时才直接下
+    Pos win2 = td.twoStepWin(color, opp);
+    if (win2.valid()) return win2;
+
+    // 4) 无威胁：对方棋子附近随机
     return randomNear(board, opp);
 }
 bool EasyJudgeAI::isHuman() const { return false; }
@@ -194,8 +219,12 @@ GreedyScoringAI::GreedyScoringAI(double attackWeight, const char* displayName)
     : attackWeight_(attackWeight), name_(displayName) {}
 
 // 决策流程（威胁层级由高到低，均复用 ThreatDetector）：
-//   己方1步必胜 → 对方1步成连 → 己方2步必胜 → 对方强制胜第一步位 → 常规评分
+//   己方1步必胜 → 对方1步成连 → 对方强制胜第一步位 → 己方2步必胜 → 常规评分
+//   防守强制胜优先于己方2步必胜：对方活三放任即活四化强制胜，己方双活三
+//   须两步兑现追不上，必须先防——保证攻防权重在决策顺序上也不偏不倚。
 Pos GreedyScoringAI::place(Board& board, ChessType color) {
+    // 先手首步：棋盘全空即执黑先行，全盘真随机（时间种子），之后走正常决策
+    if (board.isEmpty()) return randomFirstMove(board);
     ChessType opp = opponent(color);
     ThreatDetector td(board);
 
@@ -203,8 +232,6 @@ Pos GreedyScoringAI::place(Board& board, ChessType color) {
     if (win1.valid()) return win1;
     Pos blk1 = td.oneStepWin(opp);
     if (blk1.valid()) return blk1;
-    Pos win2 = td.twoStepWin(color, opp);
-    if (win2.valid()) return win2;
 
     // 统一单点火评估：防守(对方价值) + 进攻权重*己方价值，maxCap 控制量纲
     auto scoreAt = [&](int r, int c, int maxCap) {
@@ -215,13 +242,19 @@ Pos GreedyScoringAI::place(Board& board, ChessType color) {
         return defense + offense;
     };
 
-    // 对方强制胜第一步位（活四/双冲四/四三/双活三）：高优先级必防，大 maxCap 区分威胁等级
+    // 对方强制胜第一步位（活四/双冲四/四三/双活三）：高优先级必防，
+    // 必须优先于己方 2 步必胜（否则对方活三直接活四化先一步获胜）。
+    // 大 maxCap 区分威胁等级。
     auto defend = td.mustDefend(opp);
     if (!defend.empty()) {
         std::vector<ScoredMove> cs;
         for (auto& m : defend) cs.push_back({scoreAt(m.r, m.c, 1000000), m.r, m.c});
         return pickBestNoRandom(cs);
     }
+
+    // 己方 2 步必胜：仅在对方无强制胜威胁时兑现
+    Pos win2 = td.twoStepWin(color, opp);
+    if (win2.valid()) return win2;
 
     // 常规全盘扫描：防守 + 进攻权重评分
     int n = board.size();
@@ -404,6 +437,8 @@ int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
 // 防守候选合并：对方强制胜第一步位（mustDefend，覆盖活四/双冲四/四三/双活三），
 //   修复旧版"互斥选择"导致同时存在多威胁时只防其一、被另一个连杀的问题。
 Pos MinimaxPP::place(Board& board, ChessType color) {
+    // 先手首步：棋盘全空即执黑先行，全盘真随机（时间种子），之后走正常决策
+    if (board.isEmpty()) return randomFirstMove(board);
     ChessType opp = opponent(color);
 
     if (!zobristInited_) { initZobrist(); zobristInited_ = true; }
@@ -411,19 +446,26 @@ Pos MinimaxPP::place(Board& board, ChessType color) {
 
     ThreatDetector td(board);
 
-    // 1) 己方 1 步必胜  2) 对方 1 步成连（必须立即堵）  3) 己方 2 步必胜
+    // 1) 己方 1 步必胜  2) 对方 1 步成连（必须立即堵）
     Pos win1 = td.oneStepWin(color);
     if (win1.valid()) return win1;
     Pos blk1 = td.oneStepWin(opp);
     if (blk1.valid()) return blk1;
-    Pos win2 = td.twoStepWin(color, opp);
-    if (win2.valid()) return win2;
 
     auto moves = generateMoves(board);
     if (moves.empty()) return { -1, -1 };
 
     // 合并防守候选：对方强制胜第一步位（活四/双冲四/四三/双活三），mustDefend 天然去重
     auto defenseMoves = td.mustDefend(opp);
+
+    // 3) 己方 2 步必胜：仅当对方无强制胜威胁时才直接兑现（防守优先，
+    //    对方活三放任即活四化强制胜，己方双活三两步兑现追不上）。
+    if (defenseMoves.empty()) {
+        Pos win2 = td.twoStepWin(color, opp);
+
+        if (win2.valid()) return win2;
+    }
+
     const auto& cands = !defenseMoves.empty() ? defenseMoves : moves;
 
     // 搜索主导 + 启发式打破平局

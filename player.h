@@ -4,7 +4,7 @@
 // 每个棋手实现 place() 返回落子位置
 // 评分系统：单一评分核 segValue(几何级数梯度,对任意WIN_LEN成立) + 单点核 pointScore(攻防同函数)
 // 必胜/必防威胁检测统一由 threat.h/.cpp 的 ThreatDetector 提供（本文件不涉及）
-// 各 AI 攻防权重：EasyJudge=防守, PG1.0=防守, PG1.1=防守+0.9*进攻, Minimax++=搜索主导+0.001启发式
+// 各 AI 攻防权重：EasyJudge=防守, PG1.0=防守, PG1.1=防守+进攻(攻防权重相同), Minimax++=搜索主导+0.001启发式
 // Minimax++ 增强：alpha-beta 剪枝 + 启发式排序 + Zobrist 置换表 + 静态缓冲 + 统一评分
 // ============================================================
 #pragma once
@@ -17,6 +17,11 @@
 class UI;
 class Judge;
 class Stats;
+
+// 先手首步随机落子：棋盘全空（AI 执黑先手）时全盘真随机选一个空位。
+// 种子取「当前时间 + 硬件熵」，仅第一步生效，之后各步走各 AI 正常决策。
+// 供档位 2/3/4/5/7（EasyJudge/PG1.0/PG1.1/Minimax++/Tactical++）复用，APIPlayer 除外。
+Pos randomFirstMove(const Board& board);
 
 // ---- 棋手抽象基类 ----
 class Player {

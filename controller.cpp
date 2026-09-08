@@ -34,7 +34,7 @@ Player* GameController::createPlayer(int choice) {
         case 1: return new HumanPlayer(*ui_);
         case 2: return new EasyJudgeAI();                             // 随机 + 堵（最简陪练）
         case 3: return new GreedyScoringAI(0.0, "PureGreed 1.0");     // 纯防守
-        case 4: return new GreedyScoringAI(0.9, "PureGreed 1.1");     // 攻防
+        case 4: return new GreedyScoringAI(1.0, "PureGreed 1.1");     // 攻防（权重相同）
         case 5: return new MinimaxPP(judge_);
         case 6:
             // API 未配置或配置不完整时，自动回退到 Minimax++（玩家5）

@@ -36,6 +36,7 @@ public:
     void set(int r, int c, ChessType color);        // 直接设置（模拟用，不校验空位，不维护 emptyCount_）
     ChessType at(int r, int c) const;               // 读取某位置（越界返回 None）
     bool isFull() const;                            // 棋盘是否已满（O(1)，基于 emptyCount_）
+    bool isEmpty() const { return emptyCount_ == size_ * size_; }  // 棋盘是否全空（O(1)）
     bool inBounds(int r, int c) const;              // 坐标是否在棋盘内
     int size() const { return size_; }              // 当前棋盘尺寸
     int winLen() const { return winLen_; }          // 连珠获胜数
