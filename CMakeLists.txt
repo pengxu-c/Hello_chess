@@ -8,20 +8,6 @@ else()
     add_compile_options(-finput-charset=UTF-8 -fexec-charset=GBK)
 endif()
 
-include(cmake-local.cmake OPTIONAL)
-
-# ========== 只找头文件路径，不找库 ==========
-find_path(EASYX_INCLUDE
-    NAMES easyx.h
-    PATHS
-        "${EASYX_LOCAL_PATH}/include"
-        "C:/Program Files (x86)/EasyX/include"
-        "C:/EasyX/include"
-    REQUIRED
-)
-
-message(STATUS "已找到EasyX头文件: ${EASYX_INCLUDE}")
-
 # ========== 源文件 ==========
 set(SOURCE_FILES
     main.cpp
@@ -34,17 +20,22 @@ set(SOURCE_FILES
     controller.cpp
     storage.cpp
     experimental_tactical_player.cpp
+    server/asset_provider.cpp
+    server/browser_launcher.cpp
+    server/game_server.cpp
+    server/session.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 
-target_include_directories(${PROJECT_NAME} PRIVATE ${EASYX_INCLUDE})
+# 编译为 Windows 子系统：双击运行不出现控制台窗口。
+# --cli 模式由 main.cpp 的 attachConsole() 按需附加控制台。
+set_target_properties(${PROJECT_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
 
-# ========== 告诉链接器去哪个目录找库 ==========
-target_link_directories(${PROJECT_NAME} PRIVATE
-    "${EASYX_LOCAL_PATH}/lib/x64"
-    "C:/Program Files (x86)/EasyX/lib/x64"
-    "C:/EasyX/lib/x64"
+# 项目根目录（使 #include "server/xxx.h" 生效）与第三方单头文件目录（cpp-httplib）
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 
 # ========== UNICODE ==========
@@ -55,13 +46,11 @@ list(APPEND CMAKE_PREFIX_PATH "D:/SOFT/vcpkg/installed/x64-windows")
 find_package(CURL CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-# ========== 链接所有库（系统库 + vcpkg 库） ==========
+# ========== 链接库 ==========
+# ws2_32：cpp-httplib 在 Windows 下依赖 Winsock
+# EasyX 已移除，不再需要 gdi32/msimg32 等图形库
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    gdi32
-    ole32
-    oleaut32
-    winmm
-    msimg32
+    ws2_32
     CURL::libcurl
     nlohmann_json::nlohmann_json
 )

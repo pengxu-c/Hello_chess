@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gomoku</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <h1 class="brand">Gomoku</h1>
+      <div class="actions">
+        <span id="conn" class="badge badge--off">connecting</span>
+        <button id="btn-new" class="btn btn--primary">New Game</button>
+        <button id="btn-stats" class="btn">Stats</button>
+        <button id="btn-quit" class="btn btn--danger">Quit</button>
+      </div>
+    </header>
+
+    <main class="board-wrap">
+      <canvas id="board" width="720" height="720"></canvas>
+      <div id="overlay" class="overlay hidden">
+        <div class="overlay-card">
+          <h2 id="overlay-title">Result</h2>
+          <p id="overlay-text"></p>
+          <div class="overlay-actions">
+            <button id="btn-again" class="btn btn--primary">New Game</button>
+            <button id="btn-close" class="btn">Close</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <aside class="panel">
+      <div class="row"><span class="label">Status</span><span id="meta-status" class="value">-</span></div>
+      <div class="row"><span class="label">Turn</span><span id="meta-turn" class="value">-</span></div>
+      <div class="row"><span class="label">Moves</span><span id="meta-moves" class="value">0</span></div>
+      <div class="row"><span class="label">Board</span><span id="meta-size" class="value">-</span></div>
+      <div class="row"><span class="label">Black</span><span id="meta-black" class="value">-</span></div>
+      <div class="row"><span class="label">White</span><span id="meta-white" class="value">-</span></div>
+
+      <div class="panel-actions">
+        <button id="btn-undo" class="btn">Undo</button>
+        <button id="btn-save" class="btn">Save</button>
+        <button id="btn-load" class="btn">Resumes</button>
+        <button id="btn-games" class="btn">Replays</button>
+      </div>
+
+      <p id="message" class="hint"></p>
+    </aside>
+  </div>
+
+  <!-- 新游戏对话框 -->
+  <div id="modal-new" class="modal hidden">
+    <div class="modal-card">
+      <h2>New Game</h2>
+      <label class="field">Board size
+        <input id="in-size" type="number" min="4" max="30" value="15">
+      </label>
+      <label class="field">Win length
+        <input id="in-win" type="number" min="4" max="15" value="5">
+      </label>
+      <label class="field">Black (first)
+        <select id="sel-p1"></select>
+      </label>
+      <label class="field">White (second)
+        <select id="sel-p2"></select>
+      </label>
+      <label class="field field--check">
+        <input id="in-storage" type="checkbox"> Enable memory storage
+      </label>
+      <div class="modal-actions">
+        <button id="btn-start" class="btn btn--primary">Start</button>
+        <button id="btn-cancel" class="btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 列表 / 统计对话框 -->
+  <div id="modal-list" class="modal hidden">
+    <div class="modal-card modal-card--wide">
+      <h2 id="list-title">List</h2>
+      <div id="list-body" class="list-body"></div>
+      <div class="modal-actions">
+        <button id="btn-list-close" class="btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,49 +1,44 @@
 // ============================================================
-// ui.h - 用户界面类声明
-// 封装所有 EasyX 图形库调用，便于未来替换为其他图形库
-// 布局参数（网格像素/偏移/尺寸）已移入成员，由 setLayout() 设置，
-// 消除对全局可变布局变量的依赖。
+// ui.h - 用户界面类声明（纯文本终端实现）
+// 原 EasyX 图形实现已移除；本类改为在控制台以文本方式渲染棋盘并读取输入。
+// 接口与原先保持一致（initWindow/render/pollMouse/messageBox/askYesNo 等），
+// 因此 controller/player 无需改动，--cli 模式即为文本五子棋。
 // ============================================================
 #pragma once
 #include "core.h"
-#include <graphics.h>
+#include <string>
 
 class UI {
 public:
     UI();
     ~UI();
-    void initWindow(int w, int h);              // 创建图形窗口
-    void close();                               // 关闭窗口
-    void pollMouse();                           // 轮询鼠标消息，更新悬停/点击状态
-    int pollKey();                              // 轮询键盘消息，返回按下的虚拟键码（无按键返回 0）
-    Pos hoverPos() const;                       // 当前悬停的棋盘坐标
-    Pos clickPos() const;                       // 最近一次点击的棋盘坐标
-    bool hasClick() const;                      // 本帧是否有新点击
-    void clearClick();                          // 消费点击标记
-    void render(const Board& board, Pos hover,                      // 渲染棋盘+棋子+提示圈+最后一手标记+回合指示
+    void initWindow(int w, int h);              // 文本模式：打印一次操作提示
+    void close();                               // 文本模式：无资源需释放
+    void pollMouse();                           // 非阻塞读取一行落子坐标
+    int pollKey();                              // 非阻塞读取按键虚拟码（回放用）
+    Pos hoverPos() const;                       // 文本模式无悬停，恒返回无效坐标
+    Pos clickPos() const;                       // 最近一次输入的落子坐标
+    bool hasClick() const;                      // 是否有待消费的落子输入
+    void clearClick();                          // 消费落子输入标记
+    void render(const Board& board, Pos hover,                      // 打印棋盘文本
                 Pos lastBlack = { -1, -1 }, Pos lastWhite = { -1, -1 },
-                ChessType turn = ChessType::None);              // turn：当前回合方，None=不显示
-    void messageBox(const wchar_t* text);       // 弹出提示框
-    int askYesNo(const wchar_t* text);          // 弹出是/否对话框，返回选择
-    // 设置网格布局参数（替代原全局网格像素/偏移变量）；
-    // boardSize 用于 pixelToCell 的边界检查（替代原全局棋盘尺寸变量）
+                ChessType turn = ChessType::None);
+    void messageBox(const wchar_t* text);       // 打印消息
+    int askYesNo(const wchar_t* text);          // 询问 y/n，返回 IDYES/IDNO
+    // 文本模式不使用像素布局，仅记录 boardSize 用于输入范围校验
     void setLayout(int gridSize, int xOffset, int yOffset, int boardSize);
+
 private:
-    int gridSize_   = 38;    // 每格像素大小（原全局网格像素变量）
-    int xOffset_    = 213;   // 棋盘左上角 X 偏移（原全局 X 偏移变量）
-    int yOffset_    = 34;    // 棋盘左上角 Y 偏移（原全局 Y 偏移变量）
-    int boardSize_  = 15;    // 棋盘尺寸（原全局棋盘尺寸变量，用于 pixelToCell 边界检查）
-    ExMessage msg_{};        // EasyX 消息
-    int hoverR_ = -1;        // 悬停行
-    int hoverC_ = -1;        // 悬停列
-    int clickR_ = -1;        // 点击行
-    int clickC_ = -1;        // 点击列
-    bool hasClick_ = false;  // 本帧是否有点击
-    Pos pixelToCell(int x, int y) const;        // 像素坐标转棋盘坐标
-    void setPieceColor(ChessType color);        // 设置 EasyX 填充/线条颜色为指定棋子颜色（白棋白填黑线，黑棋黑填白线）
-    void drawGrid(const Board& board);          // 绘制网格线（需 board.size() 确定行列数）
-    void drawPieces(const Board& board);        // 绘制棋子
-    void drawLastMoves(const Board& board, Pos lastBlack, Pos lastWhite);  // 绘制最后一手标记环
-    void drawTurnIndicator(ChessType turn);     // 左侧绘制当前回合指示棋子
-    void drawHover(Pos hover);                  // 绘制悬停提示圈
+    int boardSize_ = 15;                 // 棋盘尺寸（输入范围校验用）
+    int clickR_ = -1;                    // 待消费的落子行
+    int clickC_ = -1;                    // 待消费的落子列
+    bool hasClick_ = false;              // 是否有待消费的落子
+    std::string toNarrow(const wchar_t* w) const;   // 宽字符转本地编码，供 printf
+    void drawBoard(const Board& board, Pos lastBlack, Pos lastWhite, ChessType turn);
+
+    // 渲染快照：棋盘无变化时跳过重绘，避免人类回合每帧清屏导致闪烁
+    std::vector<int> snapshot_;
+    Pos lastB_{ -1, -1 };
+    Pos lastW_{ -1, -1 };
+    ChessType lastTurn_ = ChessType::None;
 };
