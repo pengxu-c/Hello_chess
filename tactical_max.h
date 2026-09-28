@@ -25,6 +25,20 @@
 
 class Judge;
 
+// ---------------------------------------------------------------------------
+// 棋型诊断报告（供 bench 自测 / 调试使用，**不参与任何决策路径**）
+// 设计目的：把引擎内部的"活四 / 冲四 / 活三"判定结果以可断言的形式暴露出来，
+//           使 bug2 第 1 条（活四活三判定对调）具备长期回归测试能力。
+// ---------------------------------------------------------------------------
+struct ShapeReport {
+    int       fivePoints = 0;   // 不同的成五点个数：>=2 即活四，==1 即冲四，0 即无四
+    int       fourPoints = 0;   // 成四点个数（再走一子可产出成五点的格子）
+    int       firstFive  = -1;  // 首个成五点的线性索引（r*n+c），-1 表示无
+    long long baseScore  = 0;   // 窗口结构分
+    long long totalScore = 0;   // sideStrength = baseScore + 关键点附加值
+    int       windowCount = 0;  // 已建立的定长窗口总数
+};
+
 class TacticalMax : public Player {
 public:
     // judge 以引用持有，生命周期必须长于本对象（与 MinimaxPP 相同约定）
@@ -41,6 +55,24 @@ public:
 
     // 单步思考时间预算（毫秒），默认 1500；供测试/低配机器调整
     void setTimeBudgetMs(int ms);
+
+    // ---- 自测支持接口（仅供 bench / 调试，绝不参与决策路径） ----
+    // 约定：以下方法会重建引擎内部状态，只允许在**专用测试实例**上调用，
+    //       不要与正在对局的实例混用。
+
+    // 从零重建局面并给出 color 方的棋型诊断。
+    ShapeReport analyze(const Board& board, ChessType color);
+
+    // 局面静态评估值（请以专用测试实例调用；会重建<｜hy_place▁holder▁no▁813｜>状态）
+    int evaluateBoard(const Board& board, ChessType color);
+
+    // 给定棋盘尺寸与连珠数，返回会建立的窗口总数（参数化验证 / 退化尺寸验证）
+    int planWindowCount(int boardSize, int winLen);
+
+    // 增量状态自检：随机落若干手再逐手撤销后，各项增量状态是否完全还原。
+    // 通过返回 true。用于守护 makeMove/unmakeMove 的配对正确性。
+    // 注意：会直接在传入的 board 上落子并撤销，请传入可丢弃的棋盘。
+    bool selfCheckIncremental(Board& board, int steps, unsigned seed);
 
 protected:
     Pos chooseMove(Board& board, ChessType color) override;

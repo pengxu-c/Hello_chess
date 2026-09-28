@@ -10,6 +10,7 @@ compile_commands.json
 *.suo
 .env
 deepseek/
+garbage/
 # ========== 运行时数据（存储模块生成）==========
 data/
 

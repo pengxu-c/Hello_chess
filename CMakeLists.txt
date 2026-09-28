@@ -54,3 +54,27 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     CURL::libcurl
     nlohmann_json::nlohmann_json
 )
+
+# ============================================================================
+# ========== bench：独立基准测试可执行文件 =================================
+# 只依赖算法层（core / threat / player / tactical_max），刻意不链接
+# curl / json / server / web，因此可以随时在命令行重跑，作为长期回归工具。
+# 构建产物：build/Release/GomokuBench.exe
+#   用法见 bench/README.md
+# ============================================================================
+set(BENCH_SOURCE_FILES
+    bench/bench_main.cpp
+    bench/bench_match.cpp
+    bench/bench_selftest.cpp
+    core.cpp
+    player.cpp
+    threat.cpp
+    tactical_max.cpp
+    ui.cpp
+)
+add_executable(GomokuBench ${BENCH_SOURCE_FILES})
+target_include_directories(GomokuBench PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+# bench 不与 Windows 子系统绑定：它需要占用控制台输出测试结果
+set_target_properties(GomokuBench PROPERTIES WIN32_EXECUTABLE FALSE)
