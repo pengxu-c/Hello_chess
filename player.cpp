@@ -83,20 +83,41 @@ static int pointScore(Board& board, int r, int c, ChessType color, int maxCap) {
 // 随机机制开关（默认关闭，关闭时 pickBestMove 退化为选最高分）
 bool Player::randomEnabled = false;
 
-// 先手首步随机落子：棋盘全空（AI 执黑先手）时全盘真随机选一个空位。
-// 种子 = 当前时间戳 ^ 硬件熵，保证对局首步不重复、不可预测；
-// 仅第一步调用，之后各步仍走 各 AI 的正常决策（评分/必胜判定/搜索）。
-Pos randomFirstMove(const Board& board) {
+// 基类统一首手：只在棋盘中心、边长 n/3+1 的正方形内均匀真随机落子。
+// 设计动机：纯全盘随机会让开局过于发散（角落首手几乎必败），固定天元又会让
+// 确定性 AI 之间盘盘雷同；限定中心区既保留随机多样性，又保证首手不离谱。
+// 本函数是 Player 基类的 protected 实现，全部本地算法共享（人类 / API AI 除外）。
+Pos Player::openingMove(const Board& board) const {
+    const int n = board.size();
+    if (n <= 0) return { -1, -1 };
+
+    // 边长 = n/3 + 1（整数除法），夹在 [1, n]；正方形以棋盘中心对齐
+    int len = n / 3 + 1;
+    if (len > n) len = n;
+    if (len < 1) len = 1;
+    const int start = (n - len) / 2;
+    const int end = start + len;                 // 半开区间 [start, end)
+
+    // 收集中心正方形内的空位
     std::vector<Pos> empties;
-    int n = board.size();
-    for (int r = 0; r < n; r++)
-        for (int c = 0; c < n; c++)
-            if (board.at(r, c) == ChessType::None) empties.push_back({ r, c });
+    empties.reserve(static_cast<size_t>(len) * len);
+    for (int r = start; r < end; ++r)
+        for (int c = start; c < end; ++c)
+            if (board.inBounds(r, c) && board.at(r, c) == ChessType::None)
+                empties.push_back({ r, c });
+
+    // 兜底：中心区已无空位（理论上仅中局偶然触发）→ 退化为全盘空位
+    if (empties.empty()) {
+        for (int r = 0; r < n; ++r)
+            for (int c = 0; c < n; ++c)
+                if (board.at(r, c) == ChessType::None) empties.push_back({ r, c });
+    }
     if (empties.empty()) return { -1, -1 };
-    unsigned seed = static_cast<unsigned>(
+
+    // 真随机：thread_local 引擎避免每次调用重建；种子取「高精度时钟 ^ 硬件熵」
+    static thread_local std::mt19937 rng{ static_cast<unsigned>(
         std::chrono::steady_clock::now().time_since_epoch().count())
-        ^ std::random_device{}();
-    std::mt19937 rng(seed);
+        ^ std::random_device{}() };
     std::uniform_int_distribution<int> dist(0, static_cast<int>(empties.size()) - 1);
     return empties[dist(rng)];
 }
@@ -129,8 +150,8 @@ static Pos pickBestMove(std::vector<ScoredMove>& scored) {
 // ---------- HumanPlayer ----------
 HumanPlayer::HumanPlayer(UI& ui) : ui_(ui) {}
 
-// 人类落子：本帧有点击则返回点击位置，否则返回无效
-Pos HumanPlayer::place(Board& board, ChessType color) {
+// 人类落子：本帧有点击则返回点击位置，否则返回无效（首手同样由人类自己点）
+Pos HumanPlayer::chooseMove(Board&, ChessType) {
     if (!ui_.hasClick()) return { -1, -1 };
     Pos p = ui_.clickPos();
     ui_.clearClick();
@@ -184,9 +205,7 @@ static Pos randomNear(const Board& board, ChessType color, int radius = 2) {
 //      对方活三放任即活四化强制胜，己方双活三须两步兑现追不上，必须先防
 //   3) 己方 2 步必胜 → 直接下（无对方威胁时才兑现）
 //   4) 无威胁 → 对方棋子附近随机落子
-Pos EasyJudgeAI::place(Board& board, ChessType color) {
-    // 先手首步：棋盘全空即执黑先行，全盘真随机（时间种子），之后走正常决策
-    if (board.isEmpty()) return randomFirstMove(board);
+Pos EasyJudgeAI::chooseMove(Board& board, ChessType color) {
     ChessType opp = opponent(color);
     ThreatDetector td(board);
 
@@ -222,9 +241,7 @@ GreedyScoringAI::GreedyScoringAI(double attackWeight, const char* displayName)
 //   己方1步必胜 → 对方1步成连 → 对方强制胜第一步位 → 己方2步必胜 → 常规评分
 //   防守强制胜优先于己方2步必胜：对方活三放任即活四化强制胜，己方双活三
 //   须两步兑现追不上，必须先防——保证攻防权重在决策顺序上也不偏不倚。
-Pos GreedyScoringAI::place(Board& board, ChessType color) {
-    // 先手首步：棋盘全空即执黑先行，全盘真随机（时间种子），之后走正常决策
-    if (board.isEmpty()) return randomFirstMove(board);
+Pos GreedyScoringAI::chooseMove(Board& board, ChessType color) {
     ChessType opp = opponent(color);
     ThreatDetector td(board);
 
@@ -436,9 +453,7 @@ int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
 //   搜索主导：minimax_val(±1e8) 占绝对主导，启发式项(/1000)仅在搜索分不出高低时打破平局。
 // 防守候选合并：对方强制胜第一步位（mustDefend，覆盖活四/双冲四/四三/双活三），
 //   修复旧版"互斥选择"导致同时存在多威胁时只防其一、被另一个连杀的问题。
-Pos MinimaxPP::place(Board& board, ChessType color) {
-    // 先手首步：棋盘全空即执黑先行，全盘真随机（时间种子），之后走正常决策
-    if (board.isEmpty()) return randomFirstMove(board);
+Pos MinimaxPP::chooseMove(Board& board, ChessType color) {
     ChessType opp = opponent(color);
 
     if (!zobristInited_) { initZobrist(); zobristInited_ = true; }

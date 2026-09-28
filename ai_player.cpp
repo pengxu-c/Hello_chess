@@ -138,7 +138,7 @@ std::string APIPlayer::callAPI(const std::string& boardStr, ChessType color, int
     return response;
 }
 
-Pos APIPlayer::place(Board& board, ChessType color) {
+Pos APIPlayer::chooseMove(Board& board, ChessType color) {
     if (!cfg_.enabled) return {-1, -1};   // 未配置完整则直接无效，上一帧重试
 
     // 1. 棋盘序列化 → 2. 请求 API → 3. 解析响应坐标

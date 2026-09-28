@@ -6,7 +6,7 @@
 #include "session.h"
 #include "player.h"
 #include "ai_player.h"
-#include "experimental_tactical_player.h"
+#include "tactical_max.h"
 #include <algorithm>
 
 using json = nlohmann::json;
@@ -20,7 +20,7 @@ static std::string playerNameOf(int choice) {
         case 4: return "PureGreed 1.1";
         case 5: return "Minimax++";
         case 6: return "API AI";
-        case 7: return "Tactical++";
+        case 7: return "TacticalMax";
         default: return "Human";
     }
 }
@@ -80,7 +80,7 @@ Player* SessionController::createPlayer(int choice) {
         case 6:
             if (aiConfig_.enabled) return new APIPlayer(aiConfig_);
             return new MinimaxPP(judge_);      // 未配置则回退 Minimax++
-        case 7: return new TacticalPP(judge_);
+        case 7: return new TacticalMax(judge_);
         default: return nullptr;               // 非法编号按人类处理
     }
 }

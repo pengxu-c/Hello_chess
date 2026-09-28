@@ -10,10 +10,13 @@
 class APIPlayer : public Player {
 public:
     explicit APIPlayer(const AIConfig& cfg);
-    Pos place(Board& board, ChessType color) override;
     bool isHuman() const override;
     bool needsDelay() const override;
     const char* name() const override;
+protected:
+    // 由大模型自决落子（含首手），不套用本地算法的中心正方形随机首手
+    Pos chooseMove(Board& board, ChessType color) override;
+    bool autoFirstMove() const override { return false; }
 private:
     AIConfig cfg_;
     std::string nameBuf_;   // 持有 name() 返回的字符串内存

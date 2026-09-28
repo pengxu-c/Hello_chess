@@ -19,7 +19,7 @@ set(SOURCE_FILES
     ai_player.cpp
     controller.cpp
     storage.cpp
-    experimental_tactical_player.cpp
+    tactical_max.cpp
     server/asset_provider.cpp
     server/browser_launcher.cpp
     server/game_server.cpp
