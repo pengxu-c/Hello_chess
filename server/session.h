@@ -51,6 +51,7 @@ public:
     void newGame(int boardSize, int winLength, int p1Type, int p2Type, bool storageEnabled);
     void humanMove(int r, int c);
     void undo(int n);
+    void abort();                                  // 中止当前对局（保留棋盘，回到 Idle）
     void loadResume(const std::string& id);
     void requestQuit();
 
@@ -65,7 +66,7 @@ public:
     bool saveResume(const std::string& note);
     nlohmann::json replay(const std::string& id, int step) const;
 
-    static nlohmann::json playerCatalog();         // 棋手目录（供前端下拉框）
+    nlohmann::json playerCatalog() const;          // 棋手目录（供前端下拉框，含 API 配置状态）
     void join();                                   // 等待 loop 线程结束
 
 private:
@@ -83,6 +84,7 @@ private:
     bool reqMove_ = false;
     int moveR_ = -1, moveC_ = -1;
     int reqUndo_ = 0;
+    bool reqAbort_ = false;
     bool reqLoad_ = false;
     std::string loadId_;
 
@@ -106,6 +108,7 @@ private:
     void publishLocked();                  // 用 loop 私有状态刷新 snap_ 并通知
     void applyMoveLocked(int r, int c);    // 处理一步落子（胜负/回合/记录）
     void undoLocked(int n);                // 悔棋（重建棋盘）
+    void abortLocked();                    // 中止对局（结束存储记录，状态回 Idle）
     void startNewGameLocked();             // 按 newXxx_ 参数开新局
     void loadResumeLocked(const std::string& id);
     Player* createPlayer(int choice);      // 人类(1) 返回 nullptr

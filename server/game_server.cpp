@@ -54,9 +54,9 @@ void GameServer::registerRoutes() {
             [](bool) {});
     });
 
-    // ---- 棋手目录 ----
-    svr_->Get("/api/players", [](const httplib::Request&, httplib::Response& res) {
-        sendJson(res, SessionController::playerCatalog());
+    // ---- 棋手目录（含 API AI 是否可用，供前端显示徽标） ----
+    svr_->Get("/api/players", [this](const httplib::Request&, httplib::Response& res) {
+        sendJson(res, session_->playerCatalog());
     });
 
     // ---- 开新局 ----
@@ -90,6 +90,12 @@ void GameServer::registerRoutes() {
         json b = json::parse(req.body, nullptr, false);
         int n = b.is_discarded() ? 1 : b.value("n", 1);
         session_->undo(n);
+        sendJson(res, json{ { "ok", true } });
+    });
+
+    // ---- 中止对局：结束当前局回到 Idle（棋盘保留供查看） ----
+    svr_->Post("/api/abort", [this](const httplib::Request&, httplib::Response& res) {
+        session_->abort();
         sendJson(res, json{ { "ok", true } });
     });
 

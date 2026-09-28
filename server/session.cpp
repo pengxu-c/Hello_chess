@@ -111,6 +111,13 @@ void SessionController::undo(int n) {
     cv_.notify_all();
 }
 
+// 中止对局：只投递请求，实际处理在 loop 线程（见 abortLocked）
+void SessionController::abort() {
+    std::lock_guard<std::mutex> lk(mtx_);
+    reqAbort_ = true;
+    cv_.notify_all();
+}
+
 void SessionController::loadResume(const std::string& id) {
     std::lock_guard<std::mutex> lk(mtx_);
     reqLoad_ = true;
@@ -235,13 +242,17 @@ json SessionController::replay(const std::string& id, int step) const {
     return j;
 }
 
-json SessionController::playerCatalog() {
+// 棋手目录：id/名称/是否人类，并标注 API AI 是否已配置、未配置时的回退档位。
+// apiReady=false 时前端显示"未配置"徽标，实际开局由 createPlayer 回退到 Minimax++。
+json SessionController::playerCatalog() const {
     json arr = json::array();
     for (int i = 1; i <= 7; i++) {
         json p;
         p["id"] = i;
         p["name"] = playerNameOf(i);
         p["isHuman"] = (i == 1);
+        p["apiReady"] = (i != 6) ? true : aiConfig_.enabled;   // 仅 API AI 需要配置
+        p["fallbackId"] = (i == 6) ? 5 : i;                    // 未配置时的回退档位
         arr.push_back(p);
     }
     return arr;
@@ -258,6 +269,9 @@ void SessionController::runLoop() {
         // 3) 悔棋
         if (reqUndo_ > 0) { int n = reqUndo_; reqUndo_ = 0; undoLocked(n); continue; }
 
+        // 3.5) 中止对局（优先于回合推进，且对局中/Idle 均可消费）
+        if (reqAbort_) { reqAbort_ = false; abortLocked(); continue; }
+
         // 4) 未在对局中：等待新局/载入
         if (status_ != "InProgress") {
             cv_.wait(lk, [this] { return quit_.load() || reqNew_ || reqLoad_; });
@@ -270,7 +284,8 @@ void SessionController::runLoop() {
             // 人类回合：等待 HTTP 投递坐标
             if (!reqMove_) {
                 cv_.wait(lk, [this] {
-                    return quit_.load() || reqMove_ || reqNew_ || reqLoad_ || reqUndo_ > 0;
+                    return quit_.load() || reqMove_ || reqNew_ || reqLoad_ || reqUndo_ > 0
+                           || reqAbort_;
                 });
                 continue;
             }
@@ -290,9 +305,9 @@ void SessionController::runLoop() {
 
             lk.lock();
             thinking_ = false;
-            // 若思考期间用户请求了悔棋/新局/载入，则丢弃本次 AI 落子，
+            // 若思考期间用户请求了悔棋/新局/载入/中止，则丢弃本次 AI 落子，
             // 交给下一轮循环处理，避免"悔棋后又立刻被 AI 补一手"。
-            bool interrupted = reqUndo_ > 0 || reqNew_ || reqLoad_;
+            bool interrupted = reqUndo_ > 0 || reqNew_ || reqLoad_ || reqAbort_;
             if (!quit_.load() && status_ == "InProgress" && p.valid() && !interrupted) {
                 applyMoveLocked(p.r, p.c);
             } else {
@@ -394,6 +409,17 @@ void SessionController::undoLocked(int n) {
         for (const auto& h : history_)
             storage_.recordMove(h.first.r, h.first.c, h.second);
     }
+    publishLocked();
+}
+
+// 中止对局：结束存储记录，状态回到 Idle；棋盘内容保留供用户查看，
+// 但 canUndo/humanTurn 因 status 非 InProgress 自动为 false，不会误落子。
+void SessionController::abortLocked() {
+    if (status_ == "Idle") { message_ = "No game in progress"; publishLocked(); return; }
+    if (storage_.isEnabled()) storage_.endGame(GameStatus::Aborted);
+    status_ = "Idle";
+    thinking_ = false;
+    message_ = "Game aborted";
     publishLocked();
 }
 
