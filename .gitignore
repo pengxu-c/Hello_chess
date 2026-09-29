@@ -16,7 +16,10 @@ data/
 
 # ========== CMake 构建目录 ==========
 build/
+build-bench/
+build-msvc/
 out/
+clattervault/
 cmake-build-*/
 
 # ========== 编译产物 ==========
