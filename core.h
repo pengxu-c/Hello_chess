@@ -33,6 +33,7 @@ public:
     void clear();                                   // 清空棋盘（不改变尺寸/连珠数）
     void resize(int n);                             // 按尺寸 n 重建 n×n 棋盘并清零
     bool place(int r, int c, ChessType color);      // 落子（仅空位成功，成功时 emptyCount_--）
+    bool unset(int r, int c);                       // 撤销落子（仅有子成功，成功时 emptyCount_++，与 place 配对）
     void set(int r, int c, ChessType color);        // 直接设置（模拟用，不校验空位，不维护 emptyCount_）
     ChessType at(int r, int c) const;               // 读取某位置（越界返回 None）
     bool isFull() const;                            // 棋盘是否已满（O(1)，基于 emptyCount_）

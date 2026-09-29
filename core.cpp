@@ -39,6 +39,17 @@ bool Board::place(int r, int c, ChessType color) {
     return true;
 }
 
+// 撤销落子：仅有子的格能撤销，成功时恢复空位计数（与 place 严格配对，
+// 供悔棋/回放重建使用——用 set 清格不会维护 emptyCount_，会让 isFull 失真）
+bool Board::unset(int r, int c) {
+    if (!inBounds(r, c)) return false;
+    int idx = r * size_ + c;
+    if (map_[idx] == static_cast<int>(ChessType::None)) return false;
+    map_[idx] = static_cast<int>(ChessType::None);
+    emptyCount_++;
+    return true;
+}
+
 // 直接设置（模拟用，不校验空位）
 // 注意：此函数不维护 emptyCount_，仅用于 AI 模拟/回放等"已知目标状态"场景，
 //       调用方需保证最终状态与 emptyCount_ 一致（如回放前先 clear()）。

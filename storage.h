@@ -74,8 +74,12 @@ struct GlobalStats {
 };
 
 // ---- 存储配置 ----
+// 开关语义（全项目统一，唯一守卫点在 StorageManager 内部）：
+//   enabled = true （默认）→ 对局记录/悔棋/回放/残局/统计 全部可用
+//   enabled = false        → 上述功能一律不可用，返回空结果或 false；
+//                            对局本身照常进行（只影响记录，不影响下棋）
 struct StorageConfig {
-    bool enabled = false;                    // 是否启用记忆存储（默认关闭）
+    bool enabled = true;                     // 是否启用记忆存储（默认开启）
     std::string dataDir    = "data";         // 数据根目录
     std::string gamesDir   = "games";        // 棋局子目录
     std::string resumesDir = "resumes";      // 残棋残局子目录
@@ -104,6 +108,7 @@ public:
     bool isInGame() const;
     const std::string& currentGameId() const;
     const GameRecord& currentRecord() const;
+    const std::vector<MoveRecord>& moves() const;   // 当前对局落子序列（只读，悔棋/重建用）
 
     // ====== 悔棋 ======
     bool canUndo() const;                     // 是否可悔棋

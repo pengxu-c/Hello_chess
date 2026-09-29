@@ -70,7 +70,7 @@ void GameServer::registerRoutes() {
                           b.value("winLength", 5),
                           b.value("p1Type", 1),
                           b.value("p2Type", 2),
-                          b.value("storageEnabled", false));
+                          b.value("storageEnabled", true));   // 存储默认开启
         sendJson(res, json{ { "ok", true } });
     });
 

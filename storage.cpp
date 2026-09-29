@@ -77,16 +77,17 @@ void StorageManager::endGame(GameStatus status) {
 bool StorageManager::isInGame() const { return inGame_; }
 const std::string& StorageManager::currentGameId() const { return current_.id; }
 const GameRecord& StorageManager::currentRecord() const { return current_; }
+const std::vector<MoveRecord>& StorageManager::moves() const { return current_.moves; }
 
 // ====== 悔棋 ======
 bool StorageManager::canUndo() const {
-    return inGame_ && !current_.moves.empty();
+    return config_.enabled && inGame_ && !current_.moves.empty();
 }
 
 bool StorageManager::undoLastMove(Board& board) {
     if (!canUndo()) return false;
     MoveRecord last = current_.moves.back();
-    board.set(last.r, last.c, ChessType::None);
+    board.unset(last.r, last.c);
     current_.moves.pop_back();
     if (last.color == ChessType::Black)      current_.blackMoves--;
     else if (last.color == ChessType::White) current_.whiteMoves--;
@@ -107,6 +108,7 @@ int StorageManager::moveCount() const {
 
 // ====== 棋局回访 ======
 std::vector<std::string> StorageManager::listGames() const {
+    if (!config_.enabled) return {};
     return listIds(config_.gamesDir);
 }
 
@@ -120,6 +122,7 @@ std::vector<GameRecord> StorageManager::listGameRecords() const {
 }
 
 bool StorageManager::loadGame(const std::string& id, GameRecord& record) const {
+    if (!config_.enabled) return false;
     std::string path = filePath(config_.gamesDir, id + config_.fileExt);
     return loadRecord(path, record);
 }
@@ -131,14 +134,16 @@ bool StorageManager::replayGame(const std::string& id, Board& board, int upToSte
     board.clear();
     int n = (int)record.moves.size();
     if (upToStep < 0 || upToStep > n) upToStep = n;
+    // 用 place 重放：正确维护空位计数，保证 isFull/后续 place 语义一致
     for (int i = 0; i < upToStep; i++) {
-        board.set(record.moves[i].r, record.moves[i].c, record.moves[i].color);
+        board.place(record.moves[i].r, record.moves[i].c, record.moves[i].color);
     }
     return true;
 }
 
 // ====== 残局保存/载入 ======
 std::vector<std::string> StorageManager::listResumes() const {
+    if (!config_.enabled) return {};
     return listIds(config_.resumesDir);
 }
 
@@ -155,6 +160,7 @@ bool StorageManager::saveResume(const std::string& note) {
 }
 
 bool StorageManager::loadResume(const std::string& id, GameRecord& record) const {
+    if (!config_.enabled) return false;
     std::string path = filePath(config_.resumesDir, id + config_.fileExt);
     return loadRecord(path, record);
 }
@@ -175,7 +181,7 @@ bool StorageManager::restoreResume(const std::string& id, Board& board,
     board.clear();
 
     for (const auto& mv : record.moves) {
-        board.set(mv.r, mv.c, mv.color);
+        board.place(mv.r, mv.c, mv.color);   // place 维护 emptyCount_，保持判满正确
     }
 
     current_ = record;
@@ -190,7 +196,10 @@ bool StorageManager::restoreResume(const std::string& id, Board& board,
 }
 
 // ====== 全局统计 ======
-GlobalStats StorageManager::globalStats() const { return globalStats_; }
+GlobalStats StorageManager::globalStats() const {
+    if (!config_.enabled) return GlobalStats{};   // 关闭时返回空统计
+    return globalStats_;
+}
 
 void StorageManager::printGlobalStats() const {
     printf("=== Global Statistics ===\n");

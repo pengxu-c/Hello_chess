@@ -80,7 +80,7 @@ private:
     // 待处理请求（mtx_ 保护）
     bool reqNew_ = false;
     int newBs_ = 15, newWl_ = 5, newP1_ = 1, newP2_ = 2;
-    bool newStorage_ = false;
+    bool newStorage_ = true;   // 存储默认开启（与 StorageConfig 默认值一致）
     bool reqMove_ = false;
     int moveR_ = -1, moveC_ = -1;
     int reqUndo_ = 0;
@@ -102,7 +102,7 @@ private:
     Pos lastBlack_{ -1, -1 }, lastWhite_{ -1, -1 };
     bool thinking_ = false;
     std::string message_;
-    std::vector<std::pair<Pos, ChessType>> history_;   // 落子历史（悔棋重建用）
+    // 落子历史不再在此维护：StorageManager 是唯一事实来源（悔棋/重建/步数均由其提供）
 
     void runLoop();                        // loop 线程主体
     void publishLocked();                  // 用 loop 私有状态刷新 snap_ 并通知

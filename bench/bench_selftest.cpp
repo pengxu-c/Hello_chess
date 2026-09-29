@@ -39,9 +39,10 @@ std::unique_ptr<Board> makeBoard(int n, int w) {
     return b;
 }
 
-// 用坐标列表摆子
+// 用坐标列表摆子。必须走 place()（维护 emptyCount_）而不是 set()：
+// 否则棋盘在 Board 看来仍是"全空"，place() 入口会触发首手随机而非正常决策。
 void putStones(Board& b, ChessType c, const std::vector<std::pair<int, int>>& cells) {
-    for (const auto& p : cells) b.set(p.first, p.second, c);
+    for (const auto& p : cells) b.place(p.first, p.second, c);
 }
 
 // ===========================================================================
@@ -151,8 +152,9 @@ bool testScoreGradient(std::string& detail) {
     }
     // 活三 vs 眠三：量级必须拉开（对应"活三/眠三差 10 倍"的验收口径）
     {
-        const long long live = scoreOf({ { row, 6 }, { row, 7 }, { row, 8 } }, {});
-        const long long sleep = scoreOf({ { row, 6 }, { row, 7 }, { row, 8 } }, { { row, 4 } });
+        // 眠三：白子紧贴三子左端（隔一格的"堵"会构成 O_XXXX_ 型活四，用例就错了）
+        const long long live  = scoreOf({ { row, 6 }, { row, 7 }, { row, 8 } }, {});
+        const long long sleep = scoreOf({ { row, 6 }, { row, 7 }, { row, 8 } }, { { row, 5 } });
         if (!expectTrue(live > sleep * 3, "live three score should dwarf sleep three", detail))
             return false;
     }

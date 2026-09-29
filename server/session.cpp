@@ -338,7 +338,6 @@ void SessionController::startNewGameLocked() {
     status_ = "InProgress";
     thinking_ = false;
     message_.clear();
-    history_.clear();
 
     storage_.setEnabled(newStorage_);
     storage_.startGame(bs, wl, playerNameOf(p1Type_), playerNameOf(p2Type_),
@@ -351,7 +350,6 @@ void SessionController::applyMoveLocked(int r, int c) {
     if (board_.at(r, c) != ChessType::None) { message_ = "Cell occupied"; publishLocked(); return; }
 
     board_.place(r, c, turn_);
-    history_.push_back({ { r, c }, turn_ });
     if (turn_ == ChessType::Black) lastBlack_ = { r, c };
     else                           lastWhite_ = { r, c };
     storage_.recordMove(r, c, turn_);
@@ -371,21 +369,20 @@ void SessionController::applyMoveLocked(int r, int c) {
 
 void SessionController::undoLocked(int n) {
     if (status_ == "Idle") { message_ = "No game in progress"; publishLocked(); return; }
-    if (history_.empty()) { message_ = "Nothing to undo"; publishLocked(); return; }
-    if (n > static_cast<int>(history_.size())) n = static_cast<int>(history_.size());
+    // 悔棋属于存储功能：存储关闭时不可用（与"默认开启"的统一开关语义一致）
+    if (!storage_.isEnabled()) { message_ = "Storage is disabled"; publishLocked(); return; }
 
-    for (int i = 0; i < n; i++) history_.pop_back();
+    // 直接在存储层撤子（同步修正棋盘与落子记录，单一事实来源，无需重建）
+    const int undone = storage_.undoMoves(board_, n);
+    if (undone <= 0) { message_ = "Nothing to undo"; publishLocked(); return; }
 
-    // 重建棋盘
-    board_.clear();
-    for (const auto& h : history_) board_.place(h.first.r, h.first.c, h.second);
-
-    // 重建最后一手标记
+    // 最后一手标记：从存储记录倒序推导
+    const auto& moves = storage_.moves();
     lastBlack_ = { -1, -1 };
     lastWhite_ = { -1, -1 };
-    for (auto it = history_.rbegin(); it != history_.rend(); ++it) {
-        if (it->second == ChessType::Black && !lastBlack_.valid()) lastBlack_ = it->first;
-        if (it->second == ChessType::White && !lastWhite_.valid()) lastWhite_ = it->first;
+    for (auto it = moves.rbegin(); it != moves.rend(); ++it) {
+        if (it->color == ChessType::Black && !lastBlack_.valid()) lastBlack_ = { it->r, it->c };
+        if (it->color == ChessType::White && !lastWhite_.valid()) lastWhite_ = { it->r, it->c };
         if (lastBlack_.valid() && lastWhite_.valid()) break;
     }
 
@@ -396,19 +393,10 @@ void SessionController::undoLocked(int n) {
     bool p2Human = (p2Type_ == 1);
     if (p1Human && !p2Human)       turn_ = ChessType::Black;
     else if (!p1Human && p2Human)  turn_ = ChessType::White;
-    else                           turn_ = (history_.size() % 2 == 0) ? ChessType::Black : ChessType::White;
+    else                           turn_ = (moves.size() % 2 == 0) ? ChessType::Black : ChessType::White;
 
     status_ = "InProgress";
-    message_ = "Undo " + std::to_string(n);
-
-    // 存储同步：结束旧记录并按剩余历史重建
-    if (storage_.isEnabled()) {
-        storage_.endGame(GameStatus::Aborted);
-        storage_.startGame(board_.size(), board_.winLen(),
-                           playerNameOf(p1Type_), playerNameOf(p2Type_), p1Type_, p2Type_);
-        for (const auto& h : history_)
-            storage_.recordMove(h.first.r, h.first.c, h.second);
-    }
+    message_ = "Undo " + std::to_string(undone);
     publishLocked();
 }
 
@@ -424,6 +412,8 @@ void SessionController::abortLocked() {
 }
 
 void SessionController::loadResumeLocked(const std::string& id) {
+    // 载入残局属于存储功能：开关关闭时不可用（原来此处会无视开关强制开启，已移除）
+    if (!storage_.isEnabled()) { message_ = "Storage is disabled"; publishLocked(); return; }
     GameRecord rec;
     if (!storage_.loadResume(id, rec)) { message_ = "Load failed"; publishLocked(); return; }
 
@@ -434,11 +424,6 @@ void SessionController::loadResumeLocked(const std::string& id) {
     board_.resize(bs);
     board_.setWinLen(wl);
     board_.clear();
-    history_.clear();
-    for (const auto& m : rec.moves) {
-        board_.place(m.r, m.c, m.color);
-        history_.push_back({ { m.r, m.c }, m.color });
-    }
 
     p1Type_ = validChoice(rec.player1Type) ? rec.player1Type : 1;
     p2Type_ = validChoice(rec.player2Type) ? rec.player2Type : 1;
@@ -446,21 +431,26 @@ void SessionController::loadResumeLocked(const std::string& id) {
     p1_ = createPlayer(p1Type_);
     p2_ = createPlayer(p2Type_);
 
-    turn_ = (history_.size() % 2 == 0) ? ChessType::Black : ChessType::White;
+    // 重放：棋盘 + 存储记录同步建立（存储是唯一事实来源，不再另设内存历史）
+    storage_.startGame(bs, wl, playerNameOf(p1Type_), playerNameOf(p2Type_), p1Type_, p2Type_);
+    for (const auto& m : rec.moves) {
+        board_.place(m.r, m.c, m.color);
+        storage_.recordMove(m.r, m.c, m.color);
+    }
+
+    // 轮次与最后一手标记由记录推导
+    const auto& moves = storage_.moves();
+    turn_ = (moves.size() % 2 == 0) ? ChessType::Black : ChessType::White;
     lastBlack_ = { -1, -1 };
     lastWhite_ = { -1, -1 };
-    for (auto it = history_.rbegin(); it != history_.rend(); ++it) {
-        if (it->second == ChessType::Black && !lastBlack_.valid()) lastBlack_ = it->first;
-        if (it->second == ChessType::White && !lastWhite_.valid()) lastWhite_ = it->first;
+    for (auto it = moves.rbegin(); it != moves.rend(); ++it) {
+        if (it->color == ChessType::Black && !lastBlack_.valid()) lastBlack_ = { it->r, it->c };
+        if (it->color == ChessType::White && !lastWhite_.valid()) lastWhite_ = { it->r, it->c };
         if (lastBlack_.valid() && lastWhite_.valid()) break;
     }
     status_ = "InProgress";
     thinking_ = false;
     message_ = "Resume loaded";
-
-    storage_.setEnabled(true);
-    storage_.startGame(bs, wl, playerNameOf(p1Type_), playerNameOf(p2Type_), p1Type_, p2Type_);
-    for (const auto& h : history_) storage_.recordMove(h.first.r, h.first.c, h.second);
     publishLocked();
 }
 
@@ -481,8 +471,8 @@ void SessionController::publishLocked() {
     snap_.turn = static_cast<int>(turn_);
     snap_.lastBlackR = lastBlack_.r; snap_.lastBlackC = lastBlack_.c;
     snap_.lastWhiteR = lastWhite_.r; snap_.lastWhiteC = lastWhite_.c;
-    snap_.moveCount = static_cast<int>(history_.size());
-    snap_.canUndo = !history_.empty() && status_ != "Idle";
+    snap_.moveCount = static_cast<int>(storage_.moves().size());   // 步数与存储记录同源
+    snap_.canUndo = storage_.canUndo() && status_ != "Idle";
     snap_.thinking = thinking_;
     snap_.humanTurn = (status_ == "InProgress") &&
                       ((turn_ == ChessType::Black ? p1Type_ : p2Type_) == 1);

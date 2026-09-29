@@ -89,22 +89,12 @@ void GameController::configureRules() {
     applyBoardLayout();
     printf("Rules set: %dx%d board, %d-in-a-row to win.\n\n", boardSize_, boardSize_, winLength_);
 
-    // 记忆存储开关：只有输入 'c' 进入自定义流程后才判断是否开启，默认关闭
-    storage_.setEnabled(false);
-    if (customized) {
-        printf("Enable memory storage? (y/n, default n): ");
-        char buf2[64];
-        if (fgets(buf2, sizeof(buf2), stdin)) {
-            storage_.setEnabled(buf2[0] == 'y' || buf2[0] == 'Y');
-        }
-        if (storage_.isEnabled()) {
-            printf(">> Memory storage ENABLED. Data saved to '%s\\' directory.\n",
-                   storage_.config().dataDir.c_str());
-            printf(">> In-game commands (type in console): help, save, undo [n], abort, stats\n\n");
-        } else {
-            printf(">> Memory storage disabled.\n\n");
-        }
-    }
+    // 记忆存储：默认开启（StorageConfig 默认值即 true），不再询问。
+    // 如需关闭可在 config 层统一调整；开关语义见 storage.h 的 StorageConfig 注释。
+    storage_.setEnabled(true);
+    printf(">> Memory storage ENABLED (default). Data dir: '%s'\n",
+           storage_.config().dataDir.c_str());
+    printf(">> In-game commands (type in console): help, save, undo [n], abort, stats\n\n");
 }
 
 // 终端选择双方棋手类型
