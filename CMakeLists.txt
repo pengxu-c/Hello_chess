@@ -20,6 +20,8 @@ set(SOURCE_FILES
     controller.cpp
     storage.cpp
     tactical_max.cpp
+    player_registry.cpp
+    match.cpp
     server/asset_provider.cpp
     server/browser_launcher.cpp
     server/game_server.cpp
@@ -70,6 +72,8 @@ set(BENCH_SOURCE_FILES
     player.cpp
     threat.cpp
     tactical_max.cpp
+    player_registry.cpp
+    match.cpp
     ui.cpp
 )
 add_executable(GomokuBench ${BENCH_SOURCE_FILES})
@@ -78,3 +82,5 @@ target_include_directories(GomokuBench PRIVATE
 )
 # bench 不与 Windows 子系统绑定：它需要占用控制台输出测试结果
 set_target_properties(GomokuBench PROPERTIES WIN32_EXECUTABLE FALSE)
+# bench 刻意不链接 ai_player.cpp（其依赖 curl），故编译期关闭 API 玩家注册
+target_compile_definitions(GomokuBench PRIVATE GOMOKU_NO_API_PLAYER)

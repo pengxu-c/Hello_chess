@@ -8,6 +8,7 @@
 #include "core.h"
 #include "ai_config.h"
 #include "storage.h"
+#include "match.h"
 #include <string>
 #include <vector>
 #include <mutex>
@@ -55,6 +56,10 @@ public:
     void loadResume(const std::string& id);
     void requestQuit();
 
+    // 局中热替换玩家：在两次落子之间更换指定座位的选手
+    // seat=0 黑方，seat=1 白方；newType 为新玩家编号
+    void setPlayer(int seat, int newType);
+
     SessionSnapshot snapshot() const;              // 取当前快照
     long long version() const;                     // 状态版本号
     bool waitForChange(long long& seen);           // 阻塞等版本变化；退出返回 false
@@ -87,11 +92,14 @@ private:
     bool reqAbort_ = false;
     bool reqLoad_ = false;
     std::string loadId_;
+    bool reqSetPlayer_ = false;
+    int  setSeat_ = 0, setType_ = 0;
 
     // ---- loop 线程私有（仅 loop 线程访问，无需锁） ----
     std::thread loop_;
     Board board_;
     Judge judge_;
+    Match match_;                          // 规则内核：落子/判胜/换手唯一实现
     AIConfig aiConfig_;
     StorageManager storage_;
     Player* p1_ = nullptr;                 // 人类(类型1)时为 nullptr
@@ -111,6 +119,7 @@ private:
     void abortLocked();                    // 中止对局（结束存储记录，状态回 Idle）
     void startNewGameLocked();             // 按 newXxx_ 参数开新局
     void loadResumeLocked(const std::string& id);
+    void setPlayerLocked(int seat, int newType); // loop 线程：实际替换选手
     Player* createPlayer(int choice);      // 人类(1) 返回 nullptr
     void releasePlayers();
 };

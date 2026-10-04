@@ -6,7 +6,7 @@
 // ============================================================
 #include "player.h"
 #include "threat.h"
-#include "ui.h"
+#include "iui.h"
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
@@ -148,7 +148,7 @@ static Pos pickBestMove(std::vector<ScoredMove>& scored) {
 // ====================================================================
 
 // ---------- HumanPlayer ----------
-HumanPlayer::HumanPlayer(UI& ui) : ui_(ui) {}
+HumanPlayer::HumanPlayer(IUi& ui) : ui_(ui) {}
 
 // 人类落子：本帧有点击则返回点击位置，否则返回无效（首手同样由人类自己点）
 Pos HumanPlayer::chooseMove(Board&, ChessType) {

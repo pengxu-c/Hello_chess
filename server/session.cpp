@@ -7,26 +7,14 @@
 #include "player.h"
 #include "ai_player.h"
 #include "tactical_max.h"
+#include "player_registry.h"
 #include <algorithm>
 
 using json = nlohmann::json;
 
-// 棋手编号 → 显示名（人类固定为 Human）
-static std::string playerNameOf(int choice) {
-    switch (choice) {
-        case 1: return "Human";
-        case 2: return "EasyJudge";
-        case 3: return "PureGreed 1.0";
-        case 4: return "PureGreed 1.1";
-        case 5: return "Minimax++";
-        case 6: return "API AI";
-        case 7: return "TacticalMax";
-        default: return "Human";
-    }
-}
-
-// 有效棋手编号（1..7）
-static bool validChoice(int c) { return c >= 1 && c <= 7; }
+// 棋手显示名 / 合法性统一来自玩家注册表（新增棋手只改注册表一处）
+static std::string playerNameOf(int choice) { return playerRegistry().displayOf(choice); }
+static bool validChoice(int c) { return playerRegistry().contains(c); }
 
 // ---------- SessionSnapshot ----------
 json SessionSnapshot::toJson() const {
@@ -48,7 +36,7 @@ json SessionSnapshot::toJson() const {
 }
 
 // ---------- 生命周期 ----------
-SessionController::SessionController() {
+SessionController::SessionController() : match_(board_, judge_) {
     aiConfig_.loadFromFile();
     loop_ = std::thread([this] { runLoop(); });
 }
@@ -70,19 +58,12 @@ void SessionController::releasePlayers() {
 }
 
 // 人类(1) 返回 nullptr：其落子由 HTTP /api/move 提供，不经过 Player::place
+// 其余编号统一走玩家注册表；API 未配置时由注册表自动回退 Minimax++
 Player* SessionController::createPlayer(int choice) {
-    switch (choice) {
-        case 1: return nullptr;
-        case 2: return new EasyJudgeAI();
-        case 3: return new GreedyScoringAI(0.0, "PureGreed 1.0");
-        case 4: return new GreedyScoringAI(1.0, "PureGreed 1.1");
-        case 5: return new MinimaxPP(judge_);
-        case 6:
-            if (aiConfig_.enabled) return new APIPlayer(aiConfig_);
-            return new MinimaxPP(judge_);      // 未配置则回退 Minimax++
-        case 7: return new TacticalMax(judge_);
-        default: return nullptr;               // 非法编号按人类处理
-    }
+    if (!playerRegistry().contains(choice) || playerRegistry().isHuman(choice))
+        return nullptr;                        // 人类/非法编号：落子走 HTTP，不建实例
+    PlayerContext ctx{ &judge_, nullptr, &aiConfig_ };
+    return playerRegistry().create(choice, ctx).release();
 }
 
 // ---------- HTTP 入口 ----------
@@ -115,6 +96,18 @@ void SessionController::undo(int n) {
 void SessionController::abort() {
     std::lock_guard<std::mutex> lk(mtx_);
     reqAbort_ = true;
+    cv_.notify_all();
+}
+
+// 局中热替换玩家：在两次落子之间更换指定座位的选手
+// 线程安全：HTTP 线程只投递请求，实际替换在 loop 线程消费
+void SessionController::setPlayer(int seat, int newType) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (seat != 0 && seat != 1) return;                // 只允许 0=黑方, 1=白方
+    if (!playerRegistry().contains(newType)) return;   // 非法编号直接拒绝
+    reqSetPlayer_ = true;
+    setSeat_ = seat;
+    setType_ = newType;
     cv_.notify_all();
 }
 
@@ -272,9 +265,17 @@ void SessionController::runLoop() {
         // 3.5) 中止对局（优先于回合推进，且对局中/Idle 均可消费）
         if (reqAbort_) { reqAbort_ = false; abortLocked(); continue; }
 
-        // 4) 未在对局中：等待新局/载入
+        // 3.6) 局中热替换选手（在两次落子之间）：释放旧选手，创建新选手，同步状态
+        if (reqSetPlayer_) {
+            int seat = setSeat_, newType = setType_;
+            reqSetPlayer_ = false;
+            setPlayerLocked(seat, newType);
+            continue;
+        }
+
+        // 4) 未在对局中：等待新局/载入/换人
         if (status_ != "InProgress") {
-            cv_.wait(lk, [this] { return quit_.load() || reqNew_ || reqLoad_; });
+            cv_.wait(lk, [this] { return quit_.load() || reqNew_ || reqLoad_ || reqSetPlayer_; });
             continue;
         }
 
@@ -285,7 +286,7 @@ void SessionController::runLoop() {
             if (!reqMove_) {
                 cv_.wait(lk, [this] {
                     return quit_.load() || reqMove_ || reqNew_ || reqLoad_ || reqUndo_ > 0
-                           || reqAbort_;
+                           || reqAbort_ || reqSetPlayer_;
                 });
                 continue;
             }
@@ -305,9 +306,9 @@ void SessionController::runLoop() {
 
             lk.lock();
             thinking_ = false;
-            // 若思考期间用户请求了悔棋/新局/载入/中止，则丢弃本次 AI 落子，
+            // 若思考期间用户请求了悔棋/新局/载入/中止/换人，则丢弃本次 AI 落子，
             // 交给下一轮循环处理，避免"悔棋后又立刻被 AI 补一手"。
-            bool interrupted = reqUndo_ > 0 || reqNew_ || reqLoad_ || reqAbort_;
+            bool interrupted = reqUndo_ > 0 || reqNew_ || reqLoad_ || reqAbort_ || reqSetPlayer_;
             if (!quit_.load() && status_ == "InProgress" && p.valid() && !interrupted) {
                 applyMoveLocked(p.r, p.c);
             } else {
@@ -332,6 +333,7 @@ void SessionController::startNewGameLocked() {
     p1_ = createPlayer(p1Type_);
     p2_ = createPlayer(p2Type_);
 
+    match_.reset();
     turn_ = ChessType::Black;
     lastBlack_ = { -1, -1 };
     lastWhite_ = { -1, -1 };
@@ -349,20 +351,28 @@ void SessionController::applyMoveLocked(int r, int c) {
     if (!board_.inBounds(r, c)) { message_ = "Out of range"; publishLocked(); return; }
     if (board_.at(r, c) != ChessType::None) { message_ = "Cell occupied"; publishLocked(); return; }
 
-    board_.place(r, c, turn_);
-    if (turn_ == ChessType::Black) lastBlack_ = { r, c };
+    // 规则内核唯一实现：落子 → 判胜/判和 → 换手
+    const ChessType mover = turn_;
+    if (!match_.applyMove(r, c)) { message_ = "Illegal move"; publishLocked(); return; }
+
+    if (mover == ChessType::Black) lastBlack_ = { r, c };
     else                           lastWhite_ = { r, c };
-    storage_.recordMove(r, c, turn_);
+    storage_.recordMove(r, c, mover);
     message_.clear();
 
-    if (judge_.checkWin(board_, { r, c }, turn_)) {
-        status_ = (turn_ == ChessType::Black) ? "BlackWin" : "WhiteWin";
-        storage_.endGame(turn_ == ChessType::Black ? GameStatus::BlackWin : GameStatus::WhiteWin);
-    } else if (board_.isFull()) {
-        status_ = "Draw";
-        storage_.endGame(GameStatus::Draw);
+    if (match_.over()) {
+        if (match_.winner() == ChessType::Black) {
+            status_ = "BlackWin";
+            storage_.endGame(GameStatus::BlackWin);
+        } else if (match_.winner() == ChessType::White) {
+            status_ = "WhiteWin";
+            storage_.endGame(GameStatus::WhiteWin);
+        } else {
+            status_ = "Draw";
+            storage_.endGame(GameStatus::Draw);
+        }
     } else {
-        turn_ = opponent(turn_);
+        turn_ = match_.turn();
     }
     publishLocked();
 }
@@ -395,6 +405,10 @@ void SessionController::undoLocked(int n) {
     else if (!p1Human && p2Human)  turn_ = ChessType::White;
     else                           turn_ = (moves.size() % 2 == 0) ? ChessType::Black : ChessType::White;
 
+    // 内核同步：先按剩余步数对齐，再套用上面的"人类优先"外部规则
+    match_.syncMoveCount(static_cast<int>(moves.size()));
+    match_.setTurn(turn_);
+
     status_ = "InProgress";
     message_ = "Undo " + std::to_string(undone);
     publishLocked();
@@ -408,6 +422,47 @@ void SessionController::abortLocked() {
     status_ = "Idle";
     thinking_ = false;
     message_ = "Game aborted";
+    publishLocked();
+}
+
+// 局中热替换选手（loop 线程消费）：
+//   1) 释放旧选手，按新编号创建新选手（人类返回 nullptr，落子走 HTTP）
+//   2) 同步 p1Type_/p2Type_、快照名
+//   3) 若替换的是当前回合方，且新选手是人类，则立即把回合交还给人类（等待 HTTP 输入）
+//   4) 若替换的是当前回合方，且新选手是 AI，则立即让 AI 思考（下一轮循环）
+// 关键：不改变棋盘、不改变步数、不改变 match_ 内核状态，只换指针。
+// 注：存储记录中的 player1Type/player2Type 是历史快照，热替换不修改。
+void SessionController::setPlayerLocked(int seat, int newType) {
+    if (status_ != "InProgress") return;        // 非对局中不处理
+    if (seat != 0 && seat != 1) return;         // 只允许 0=黑方, 1=白方
+    if (!playerRegistry().contains(newType)) return;
+
+    bool isMyTurn = (seat == 0) ? (turn_ == ChessType::Black) : (turn_ == ChessType::White);
+    Player** pp = (seat == 0) ? &p1_ : &p2_;
+    int*     pt = (seat == 0) ? &p1Type_ : &p2Type_;
+
+    // 释放旧选手，创建新选手
+    delete *pp;
+    *pt = newType;
+    PlayerContext ctx{ &judge_, nullptr, &aiConfig_ };
+    *pp = playerRegistry().create(newType, ctx).release();
+
+    // 同步快照名
+    if (seat == 0) snap_.blackName = playerNameOf(newType);
+    else           snap_.whiteName = playerNameOf(newType);
+
+    // 若替换的是当前回合方，需重新判断 humanTurn / 触发 AI 思考
+    if (isMyTurn) {
+        if (newType == 1) {
+            // 新选手是人类：立即把回合交还给人类（等待 HTTP 输入）
+            // 不改变 turn_，但 humanTurn 会在 publishLocked 中重新计算
+        } else {
+            // 新选手是 AI：立即让 AI 思考（下一轮循环）
+            // 不改变 turn_，但下一轮会走 AI 分支
+        }
+    }
+
+    message_ = (seat == 0) ? "Black player swapped" : "White player swapped";
     publishLocked();
 }
 
@@ -441,6 +496,8 @@ void SessionController::loadResumeLocked(const std::string& id) {
     // 轮次与最后一手标记由记录推导
     const auto& moves = storage_.moves();
     turn_ = (moves.size() % 2 == 0) ? ChessType::Black : ChessType::White;
+    match_.syncMoveCount(static_cast<int>(moves.size()));
+    match_.setTurn(turn_);
     lastBlack_ = { -1, -1 };
     lastWhite_ = { -1, -1 };
     for (auto it = moves.rbegin(); it != moves.rend(); ++it) {

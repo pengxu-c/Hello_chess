@@ -8,6 +8,7 @@
 #include "player.h"
 #include "ai_player.h"
 #include "tactical_max.h"
+#include "player_registry.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -16,7 +17,8 @@
 #include <conio.h>
 #include <string>
 
-GameController::GameController() {
+GameController::GameController()
+    : match_(board_, judge_) {
     ui_ = new UI();
     srand((unsigned int)time(NULL));
     aiConfig_.loadFromFile();
@@ -28,22 +30,13 @@ GameController::~GameController() {
     delete ui_;
 }
 
-// 按编号创建棋手对象
+// 按编号创建棋手对象（统一走玩家注册表：新增棋手只在 player_registry.cpp 注册一处）
 Player* GameController::createPlayer(int choice) {
-    switch (choice) {
-        case 1: return new HumanPlayer(*ui_);
-        case 2: return new EasyJudgeAI();                             // 随机 + 堵（最简陪练）
-        case 3: return new GreedyScoringAI(0.0, "PureGreed 1.0");     // 常规评分纯防守（威胁层级仍会主动进攻）
-        case 4: return new GreedyScoringAI(1.0, "PureGreed 1.1");     // 常规评分攻防同权（威胁层级共用）
-        case 5: return new MinimaxPP(judge_);
-        case 6:
-            // API 未配置或配置不完整时，自动回退到 Minimax++（玩家5）
-            if (aiConfig_.enabled) return new APIPlayer(aiConfig_);
-            printf(">> API AI unavailable (config.json missing or incomplete). Falling back to Minimax++.\n");
-            return new MinimaxPP(judge_);
-        case 7: return new TacticalMax(judge_);                     // 最强档：增量评估 + PVS + VCF/VCT
-        default: return new HumanPlayer(*ui_);
-    }
+    if (!playerRegistry().contains(choice)) choice = 1;   // 非法编号按人类处理
+    if (choice == 6 && !aiConfig_.enabled)
+        printf(">> API AI unavailable (config.json missing or incomplete). Falling back to Minimax++.\n");
+    PlayerContext ctx{ &judge_, ui_, &aiConfig_ };
+    return playerRegistry().create(choice, ctx).release();
 }
 
 // 释放旧玩家并按编号创建新玩家（消除 selectPlayers / loadResumeMenu 中的重复 delete+createPlayer）
@@ -261,6 +254,7 @@ void GameController::replayMenu() {
 void GameController::playOneGame() {
     board_.clear();
     stats_.reset();
+    match_.reset();                              // 规则内核复位（黑先）
 
     // 开始记录棋局
     storage_.startGame(boardSize_, winLength_,
@@ -298,26 +292,29 @@ void GameController::playOneGame() {
                     ui_->messageBox(L"Occupied! Choose an empty cell.");
                 }
             } else {
-                // 落子
-                board_.place(pos.r, pos.c, currentColor);
-                current->markLastMove(pos);          // 记录该玩家最后一手（供 UI 闪烁标记）
-                stats_.recordMove(currentColor);
-                storage_.recordMove(pos.r, pos.c, currentColor);
+                // 规则内核唯一实现：落子 → 判胜/判和 → 换手
+                if (match_.applyMove(pos.r, pos.c)) {
+                    current->markLastMove(pos);          // 供 UI 闪烁标记
+                    stats_.recordMove(currentColor);
+                    storage_.recordMove(pos.r, pos.c, currentColor);
 
-                // 判定胜负（checkWin 内部用 board_.winLen()，不再传 winLength_）
-                if (judge_.checkWin(board_, pos, currentColor)) {
-                    const wchar_t* who = (current == player1_) ? L"Player 1 wins!" : L"Player 2 wins!";
-                    ui_->messageBox(who);
-                    storage_.endGame(current == player1_ ? GameStatus::BlackWin : GameStatus::WhiteWin);
-                    running = false;
-                } else if (board_.isFull()) {
-                    ui_->messageBox(L"Board full! Draw!");
-                    storage_.endGame(GameStatus::Draw);
-                    running = false;
-                } else {
-                    // 切换回合：颜色取反，玩家指针交换
-                    currentColor = opponent(currentColor);
-                    current = (current == player1_) ? player2_ : player1_;
+                    if (match_.over()) {
+                        if (match_.winner() != ChessType::None) {
+                            const wchar_t* who = (match_.winner() == ChessType::Black)
+                                                     ? L"Player 1 wins!" : L"Player 2 wins!";
+                            ui_->messageBox(who);
+                            storage_.endGame(match_.winner() == ChessType::Black
+                                                 ? GameStatus::BlackWin : GameStatus::WhiteWin);
+                        } else {
+                            ui_->messageBox(L"Board full! Draw!");
+                            storage_.endGame(GameStatus::Draw);
+                        }
+                        running = false;
+                    } else {
+                        // 切换回合：颜色取反，玩家指针交换
+                        currentColor = match_.turn();
+                        current = (current == player1_) ? player2_ : player1_;
+                    }
                 }
             }
         }

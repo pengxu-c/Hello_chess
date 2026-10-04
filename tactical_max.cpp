@@ -1072,6 +1072,17 @@ struct TacticalMax::Impl {
         if (b.size() != n || b.winLen() != w) buildIndex(b);
         resetState(b);
 
+        // 首手兜底：空棋盘时 activeCnt 全零，genCands 会退化为全盘扫描（224 候选 × 深度 4
+        // 搜索 ≈ 25 亿节点，直接爆炸）。直接走中心，跳过全部搜索。
+        if (b.isEmpty()) {
+            const int center = n / 2;
+            if (b.at(center, center) == ChessType::None) return { center, center };
+            for (int r = 0; r < n; ++r)
+                for (int c = 0; c < n; ++c)
+                    if (b.at(r, c) == ChessType::None) return { r, c };
+            return { -1, -1 };
+        }
+
         nodes    = 0;
         stopped  = false;
         startTp  = std::chrono::steady_clock::now();

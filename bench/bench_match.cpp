@@ -8,44 +8,36 @@
 #include "../player.h"
 #include "../tactical_max.h"
 #include "../ui.h"
+#include "../player_registry.h"
 
 #include <algorithm>
 #include <chrono>
 #include <random>
 
+// 显示名 / 可用编号 / 构建统一委托给玩家注册表（唯一注册点见 player_registry.cpp）
 const char* playerIdName(int id) {
-    switch (id) {
-        case kPidEasyJudge:   return "EasyJudge";
-        case kPidPureGreed10: return "PureGreed-1.0";
-        case kPidPureGreed11: return "PureGreed-1.1";
-        case kPidMinimaxPP:   return "Minimax++";
-        case kPidTacticalMax: return "TacticalMax";
-        default:              return "Unknown";
-    }
+    const PlayerInfo* p = playerRegistry().find(id);
+    return p ? p->idName.c_str() : "Unknown";
 }
 
 const std::vector<int>& benchPlayerIds() {
-    static const std::vector<int> ids = {
-        kPidEasyJudge, kPidPureGreed10, kPidPureGreed11, kPidMinimaxPP, kPidTacticalMax,
-    };
+    static const std::vector<int> ids = [] {
+        std::vector<int> v;
+        for (const PlayerInfo& info : playerRegistry().catalog())
+            if (info.playable) v.push_back(info.id);
+        return v;
+    }();
     return ids;
 }
 
 bool isPlayableId(int id) {
-    for (int x : benchPlayerIds()) if (x == id) return true;
-    return false;
+    return playerRegistry().isPlayable(id);
 }
 
 std::unique_ptr<Player> createPlayerById(int id, Judge& judge, UI*) {
-    switch (id) {
-        case kPidEasyJudge:   return std::make_unique<EasyJudgeAI>();
-        case kPidPureGreed10: return std::make_unique<GreedyScoringAI>(0.0, "PureGreed 1.0");
-        case kPidPureGreed11: return std::make_unique<GreedyScoringAI>(1.0, "PureGreed 1.1");
-        case kPidMinimaxPP:   return std::make_unique<MinimaxPP>(judge);
-        case kPidTacticalMax: return std::make_unique<TacticalMax>(judge);
-        default: break;
-    }
-    return nullptr;
+    if (!playerRegistry().isPlayable(id)) return nullptr;
+    PlayerContext ctx{ &judge, nullptr, nullptr };
+    return playerRegistry().create(id, ctx);
 }
 
 namespace {

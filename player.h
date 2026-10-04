@@ -21,7 +21,7 @@
 #include <string>
 #include <cstdint>
 
-class UI;
+class IUi;
 class Judge;
 class Stats;
 
@@ -63,10 +63,10 @@ protected:
     Pos lastMove_{ -1, -1 };                                // 该玩家最近落子位置
 };
 
-// ---- 人类玩家：从 UI 鼠标点击获取落子 ----
+// ---- 人类玩家：从界面（IUi）获取落子 ----
 class HumanPlayer : public Player {
 public:
-    explicit HumanPlayer(UI& ui);
+    explicit HumanPlayer(IUi& ui);
     bool isHuman() const override;
     bool needsDelay() const override;
     const char* name() const override;
@@ -74,7 +74,7 @@ protected:
     Pos chooseMove(Board& board, ChessType color) override;
     bool autoFirstMove() const override { return false; }   // 人类自己下，不走首手随机
 private:
-    UI& ui_;
+    IUi& ui_;
 };
 
 // ---- 最简 AI：随机 + 堵（调用 ThreatDetector 拿必胜/必防候选，随机下）----

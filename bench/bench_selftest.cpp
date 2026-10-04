@@ -8,6 +8,7 @@
 #include "../core.h"
 #include "../player.h"
 #include "../tactical_max.h"
+#include "../match.h"
 
 #include <cstdio>
 #include <memory>
@@ -337,6 +338,83 @@ bool testDoubleThreat(std::string& detail) {
     return true;
 }
 
+// ===========================================================================
+// T8 规则内核（Match）：回合推进 / 胜负判定 / 非法落子 / 撤销
+// ===========================================================================
+bool testMatchKernel(std::string& detail) {
+    Judge judge;
+    auto board = makeBoard(15, 5);
+    Match m(*board, judge);
+
+    if (!expectTrue(m.turn() == ChessType::Black, "initial turn must be Black", detail)) return false;
+    if (!expectTrue(!m.over(), "initial game must not be over", detail)) return false;
+
+    // 非法落子不应改变任何状态
+    if (!expectTrue(!m.applyMove(-1, 0), "out-of-range move must fail", detail)) return false;
+    if (!expectTrue(!m.applyMove(15, 15), "out-of-bounds move must fail", detail)) return false;
+
+    // 正常落子与换手
+    if (!expectTrue(m.applyMove(7, 7), "legal move must succeed", detail)) return false;
+    if (!expectTrue(m.turn() == ChessType::White, "turn must switch to White", detail)) return false;
+    if (!expectTrue(m.moveCount() == 1, "move count must be 1", detail)) return false;
+    if (!expectTrue(!m.applyMove(7, 7), "occupied cell must fail", detail)) return false;
+
+    // 撤销一手应回到黑方回合
+    m.undoLastMove(7, 7);
+    if (!expectTrue(m.turn() == ChessType::Black, "undo must restore Black turn", detail)) return false;
+    if (!expectTrue(m.moveCount() == 0, "undo must restore move count", detail)) return false;
+
+    // 构造黑方五连取胜：黑 (0,0..4)，白在别处应对
+    auto mv = [&](int r, int c, bool expectOk, const std::string& what) {
+        return expectTrue(m.applyMove(r, c) == expectOk, what, detail);
+    };
+    if (!mv(0, 0, true,  "black (0,0)"))          return false;
+    if (!mv(1, 0, true,  "white (1,0)"))          return false;
+    if (!mv(0, 1, true,  "black (0,1)"))          return false;
+    if (!mv(1, 1, true,  "white (1,1)"))          return false;
+    if (!mv(0, 2, true,  "black (0,2)"))          return false;
+    if (!mv(1, 2, true,  "white (1,2)"))          return false;
+    if (!mv(0, 3, true,  "black (0,3)"))          return false;
+    if (!mv(2, 0, true,  "white (2,0)"))          return false;
+    if (!mv(0, 4, true,  "black (0,4) wins"))     return false;
+
+    if (!expectTrue(m.over(), "game must be over after five in a row", detail)) return false;
+    if (!expectTrue(m.winner() == ChessType::Black, "Black must be the winner", detail)) return false;
+    if (!expectTrue(!m.isDraw(), "five in a row must not be a draw", detail)) return false;
+    if (!expectTrue(!m.applyMove(5, 5), "no move allowed after game over", detail)) return false;
+
+    return true;
+}
+
+// ===========================================================================
+// T9 首手中心兜底：空棋盘时 TacticalMax / MinimaxPP 必须直接走中心，
+// 否则 genCands 退化为全盘扫描 → 搜索爆炸 → 界面卡死。
+// ===========================================================================
+bool testFirstMoveCenter(std::string& detail) {
+    Judge judge;
+    auto board = makeBoard(15, 5);
+
+    // TacticalMax 首手
+    {
+        TacticalMax tm(judge);
+        Pos p = tm.place(*board, ChessType::Black);   // 走公共接口，内部委托 chooseMove
+        if (!expectTrue(p.valid(), "TacticalMax first move must be valid", detail)) return false;
+        int center = 15 / 2;
+        if (!expectTrue(p.r == center && p.c == center, "TacticalMax first move must be center", detail)) return false;
+    }
+
+    // MinimaxPP 首手
+    {
+        MinimaxPP mm(judge);
+        Pos p = mm.place(*board, ChessType::Black);
+        if (!expectTrue(p.valid(), "MinimaxPP first move must be valid", detail)) return false;
+        int center = 15 / 2;
+        if (!expectTrue(p.r == center && p.c == center, "MinimaxPP first move must be center", detail)) return false;
+    }
+
+    return true;
+}
+
 struct Case {
     const char* name;
     bool (*fn)(std::string&);
@@ -350,6 +428,8 @@ const Case kCases[] = {
     { "T5 tactical-behavior",   testTacticalBehavior },
     { "T6 multi-size",          testMultiSizeRobustness },
     { "T7 double-threat",       testDoubleThreat },
+    { "T8 match-kernel",        testMatchKernel },
+    { "T9 first-move-center",   testFirstMoveCenter },
 };
 
 }  // namespace

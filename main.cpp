@@ -11,6 +11,7 @@
 #include "ai_config.h"
 #include "ai_player.h"
 #include "tactical_max.h"
+#include "player_registry.h"
 #include <cstdio>
 #include <cstdarg>
 #include <string>
@@ -99,19 +100,11 @@ static void spOut(const char* fmt, ...) {
     fflush(g_selfplayLog);
 }
 
-// 按编号创建 AI 棋手（headless 场景人类不参与，非法编号回退 Minimax++）
+// 按编号创建 AI 棋手（统一走玩家注册表；headless 场景人类/未知编号回退 Minimax++）
 static Player* makeAiPlayer(int type, Judge& judge, const AIConfig& cfg) {
-    switch (type) {
-        case 2: return new EasyJudgeAI();
-        case 3: return new GreedyScoringAI(0.0, "PureGreed 1.0");
-        case 4: return new GreedyScoringAI(1.0, "PureGreed 1.1");
-        case 5: return new MinimaxPP(judge);
-        case 6:
-            if (cfg.enabled) return new APIPlayer(cfg);
-            return new MinimaxPP(judge);
-        case 7: return new TacticalMax(judge);
-        default: return new MinimaxPP(judge);
-    }
+    if (!playerRegistry().contains(type) || playerRegistry().isHuman(type)) type = 5;
+    PlayerContext ctx{ &judge, nullptr, &cfg };
+    return playerRegistry().create(type, ctx).release();
 }
 
 // 跑 games 局 p1(黑) vs p2(白)，结果写入 selfplay.log
