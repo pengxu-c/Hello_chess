@@ -286,6 +286,57 @@ bool testMultiSizeRobustness(std::string& detail) {
     return true;
 }
 
+
+// ===========================================================================
+// T7 双威胁层（twoStepWin 等价：一步形成活四/双冲四/四三/双活三）
+// ===========================================================================
+bool testDoubleThreat(std::string& detail) {
+    Judge judge;
+    constexpr int n = 15, w = 5;
+
+    // (a) 双活三交叉点必须直接兑现：水平二 (7,6)(7,7) + 垂直二 (5,8)(6,8)，
+    //     落 (7,8) 同时成两个活三 → 强制胜第一手
+    {
+        auto board = makeBoard(n, w);
+        putStones(*board, ChessType::Black, { { 7, 6 }, { 7, 7 }, { 5, 8 }, { 6, 8 } });
+        putStones(*board, ChessType::White, { { 0, 0 }, { 14, 14 } });
+        TacticalMax ai(judge);
+        ai.setTimeBudgetMs(300);
+        const Pos mv = ai.place(*board, ChessType::Black);
+        if (!expectTrue(mv.valid() && mv.r == 7 && mv.c == 8,
+                        "must take double-live-three cross point (7,8)", detail))
+            return false;
+    }
+    // (b) 单活三不得被误判为双威胁：黑已有活三 (7,6)(7,7)(7,8)，轮黑走时
+    //     若把活三延伸点误判成"双威胁"会直接乱下；这里只断言引擎给出
+    //     合法着法且不崩（误判修复的正确性由 threatUnitsAfter 去重保证）
+    {
+        auto board = makeBoard(n, w);
+        putStones(*board, ChessType::Black, { { 7, 6 }, { 7, 7 }, { 7, 8 } });
+        putStones(*board, ChessType::White, { { 0, 0 } });
+        TacticalMax ai(judge);
+        ai.setTimeBudgetMs(300);
+        const Pos mv = ai.place(*board, ChessType::Black);
+        if (!expectTrue(mv.valid() && board->place(mv.r, mv.c, ChessType::Black),
+                        "single live three must not crash / must stay legal", detail))
+            return false;
+    }
+    // (c) 对手活三端点必须防（防守层经 threatUnitsAfter 识别对方活四制造点）
+    {
+        auto board = makeBoard(n, w);
+        putStones(*board, ChessType::White, { { 5, 5 }, { 5, 6 }, { 5, 7 } });
+        putStones(*board, ChessType::Black, { { 0, 0 }, { 10, 10 } });
+        TacticalMax ai(judge);
+        ai.setTimeBudgetMs(300);
+        const Pos mv = ai.place(*board, ChessType::Black);
+        const bool left  = mv.valid() && mv.r == 5 && mv.c == 4;
+        const bool right = mv.valid() && mv.r == 5 && mv.c == 8;
+        if (!expectTrue(left || right, "must block opponent's live three end", detail))
+            return false;
+    }
+    return true;
+}
+
 struct Case {
     const char* name;
     bool (*fn)(std::string&);
@@ -298,6 +349,7 @@ const Case kCases[] = {
     { "T4 incremental-restore", testIncremental },
     { "T5 tactical-behavior",   testTacticalBehavior },
     { "T6 multi-size",          testMultiSizeRobustness },
+    { "T7 double-threat",       testDoubleThreat },
 };
 
 }  // namespace

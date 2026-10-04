@@ -101,8 +101,8 @@ http://127.0.0.1:8099/
 |------|------|------|
 | 1 | Human | 人类（鼠标点击） |
 | 2 | EasyJudge | 最弱：随机 + 堵 |
-| 3 | PureGreed 1.0 | 纯防守评分 |
-| 4 | PureGreed 1.1 | 攻防评分 |
+| 3 | PureGreed 1.0 | 威胁层级攻防共用；常规评分纯防守（只堵不建） |
+| 4 | PureGreed 1.1 | 同上；常规评分攻防同权（堵与建比较） |
 | 5 | Minimax++ | α-β 搜索 |
 | 6 | API AI | 远程大模型（需配置 config.json） |
 | 7 | TacticalMax | **最强**：增量评估 + PVS + VCF/VCT |

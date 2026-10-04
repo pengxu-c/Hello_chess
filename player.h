@@ -12,7 +12,7 @@
 //
 // 评分系统：单一评分核 segValue + 单点核 pointScore（供贪心/启发式复用）
 // 必胜/必防威胁检测统一由 threat.h/.cpp 的 ThreatDetector 提供
-// 各 AI 攻防权重：EasyJudge=防守, PG1.0=防守, PG1.1=防守+进攻, Minimax++=搜索主导
+// 各 AI 攻防属性（常规评分层；威胁层级各档共用且攻防兼备）：EasyJudge=威胁判定+随机, PG1.0=评分纯防守, PG1.1=评分攻防同权, Minimax++=搜索主导
 // ============================================================
 #pragma once
 #include "core.h"

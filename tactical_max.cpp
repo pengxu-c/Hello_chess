@@ -663,8 +663,14 @@ struct TacticalMax::Impl {
             if (pt != idx && !keyFive[static_cast<size_t>(colorIndex(c))].contains(pt)) ++units;
         if (units >= 2) return units;
 
-        // 新增活三：窗口内加上本子后达到"再走一子成活四"的结构
+        // 新增活三：窗口内加上本子后达到"再走一子成活四"的结构。
+        // 关键去重：同一根活三会被 2~3 个相邻窗口各自判定（如 _XXX_ 的三个
+        // 滑窗），若按窗口累加，单个活三会被数成 2~3 个"威胁"，导致
+        // threatUnitsAfter 把单活三点误判为双威胁。这里以"窗口内己方子的
+        // 棋盘格子集合"为威胁签名去重——同一活三在任何窗口视角下己方子
+        // 集合相同，而真正独立的两个活三签名必然不同。
         const ChessType op = oppOf(c);
+        std::vector<int> seenSig;                    // 已计入的威胁签名（扁平存储）
         for (const WinRef& ref : refs[static_cast<size_t>(idx)]) {
             const WindowInfo& wi = wins[static_cast<size_t>(ref.wid)];
             if (maskOf(wi, op) != 0u) continue;
@@ -675,11 +681,29 @@ struct TacticalMax::Impl {
             const bool oa = outEmpty(b, wi.outA);
             const bool ob = outEmpty(b, wi.outB);
             const uint32_t e2 = (~m2) & fullMask();
+            bool isLive3 = false;
             for (int k = 0; k < w; ++k) {
                 if ((e2 & (1u << k)) == 0u) continue;
                 const int h = loneEmptyBit(m2 | (1u << k), w);
-                if (hasOuterFivePoint(h, oa, ob, w)) { ++units; break; }
+                if (hasOuterFivePoint(h, oa, ob, w)) { isLive3 = true; break; }
             }
+            if (!isLive3) continue;
+            // 签名 = 该窗口内己方子的棋盘格子索引（升序扁平化）
+            int sig[kMaxWinLen];
+            int sigLen = 0;
+            for (int k = 0; k < w; ++k)
+                if ((m2 & (1u << k)) != 0u) sig[sigLen++] = wi.cells[static_cast<size_t>(k)];
+            std::sort(sig, sig + sigLen);
+            bool dup = false;
+            for (int base = 0; base + sigLen <= static_cast<int>(seenSig.size()); base += sigLen) {
+                bool same = true;
+                for (int k = 0; k < sigLen; ++k)
+                    if (seenSig[static_cast<size_t>(base + k)] != sig[k]) { same = false; break; }
+                if (same) { dup = true; break; }
+            }
+            if (dup) continue;
+            for (int k = 0; k < sigLen; ++k) seenSig.push_back(sig[k]);
+            ++units;
         }
         return units;
     }
@@ -1116,6 +1140,37 @@ struct TacticalMax::Impl {
                     if (val > alpha) alpha = val;
                 }
                 if (complete || bestVal > -kInf / 2) return best;
+            }
+        }
+        // 4.5) 己方一步双威胁（twoStepWin 增强层）：落一子即形成
+        //      活四/双冲四/四三/双活三 → 对手一手堵不完，强制胜，直接兑现。
+        //      位置依据：放在防守层之后（对方强制胜优先处理）；
+        //      放在 VCT 之前（双威胁是 1 手强制胜，先于多手链杀；且纯双活三
+        //      的第一手不含"四"，不在 keyFour 集合里，VCT 的候选覆盖不到，
+        //      本层是补盲区的关键）。
+        //      反杀验证：命中后检查对方是否存在连续冲四反杀（对方借堵棋
+        //      成四反打是经典假双威胁），有则弃用该点继续找，防止"押上
+        //      全部子力却被反杀"。
+        {
+            std::vector<std::pair<int, int>> cands;      // (units, idx)
+            for (int idx = 0; idx < cellTotal; ++idx) {
+                if (activeCnt[static_cast<size_t>(idx)] <= 0) continue;
+                if (isStone(b, idx)) continue;
+                const int units = threatUnitsAfter(b, idx, me);
+                if (units >= 2) cands.emplace_back(units, idx);
+            }
+            std::sort(cands.begin(), cands.end(),
+                      [](const std::pair<int, int>& a, const std::pair<int, int>& x) {
+                          return a.first > x.first;
+                      });
+            for (const auto& cand : cands) {
+                const int idx = cand.second;
+                makeMove(b, idx, me);
+                Pos v;
+                const bool refuted = vcf(b, op, leafVcf, v);   // 对方连冲四反杀？
+                unmakeMove(b, idx);
+                if (!refuted) return { idx / n, idx % n };
+                if (timeUp()) break;
             }
         }
         // 5) 己方 VCT 追胜（冲四 + 活三组合）
