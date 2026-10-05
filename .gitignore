@@ -1,26 +1,23 @@
-# ========== 本地配置（含 API Key）==========
+# ========== 本地配置（含 API Key，绝不提交）==========
 config.json
-CLAUDE.md
-cmake-local.cmake
+.env
+deepseek/
+**/deepseek/
+
+# ========== 构建目录 ==========
+build/
+build-*/
+out/
+cmake-build-*/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 compile_commands.json
 *.user
 *.suo
-.env
-deepseek/
-garbage/
-# ========== 运行时数据（存储模块生成）==========
-data/
 
-# ========== CMake 构建目录 ==========
-build/
-build-bench/
-build-msvc/
-out/
-clattervault/
-cmake-build-*/
+# ========== 运行时数据（存储插件生成）==========
+data/
 
 # ========== 编译产物 ==========
 *.exe
@@ -33,6 +30,24 @@ cmake-build-*/
 *.dll
 *.a
 *.so
+
+# ========== 基准测试日志 ==========
+clattervault/
+
+# ---- 例外：运行时依赖必须跟程序一起走 ----
+# libcurl.dll / z.dll 是 API AI 玩家的工作前提（vcpkg 的 libcurl.lib 只有 22KB，
+# 是导入库，真实现现在 DLL 里）。构建时 CMake 会把它们拷到 exe 旁边，
+# 因此这些"编译产物"其实是运行时必需品，必须提交，否则换台机器就起不来。
+!build/Release/libcurl.dll
+!build/Release/z.dll
+
+# ========== 一次性调试输出（临时排查用，不入库）==========
+b1.txt
+b2.txt
+st.txt
+v1.txt
+v2.txt
+holdw.txt
 
 # ========== IDE 本地配置 ==========
 .vscode/

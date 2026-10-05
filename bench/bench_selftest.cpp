@@ -5,10 +5,12 @@
 
 #include "bench_selftest.h"
 
-#include "../core.h"
-#include "../player.h"
-#include "../tactical_max.h"
-#include "../match.h"
+#include "../engine/core.h"
+#include "../engine/player.h"
+#include "../engine/tactical_max.h"
+#include "../kernel/GomokuRules.h"     // T8：规则内核（新架构）
+#include "../kernel/MatchState.h"
+#include "../kernel/SquareBoard.h"
 
 #include <cstdio>
 #include <memory>
@@ -339,14 +341,18 @@ bool testDoubleThreat(std::string& detail) {
 }
 
 // ===========================================================================
-// T8 规则内核（Match）：回合推进 / 胜负判定 / 非法落子 / 撤销
+// T8 规则内核（微内核 MatchState）：回合推进 / 胜负判定 / 非法落子 / 撤销
+//
+// 旧版这里测的是 legacy::Match；新架构的规则内核是 gomoku::MatchState，
+// 因此本用例改为直接测它 —— 保证回归覆盖跟着产品代码走，而不是跟着旧代码走。
 // ===========================================================================
 bool testMatchKernel(std::string& detail) {
-    Judge judge;
-    auto board = makeBoard(15, 5);
-    Match m(*board, judge);
+    gomoku::SquareBoard board;
+    gomoku::GomokuRules rules;
+    gomoku::MatchState m(board, rules);
+    m.reset(gomoku::RulesConfig{ 15, 5 });
 
-    if (!expectTrue(m.turn() == ChessType::Black, "initial turn must be Black", detail)) return false;
+    if (!expectTrue(m.turn() == gomoku::Stone::Black, "initial turn must be Black", detail)) return false;
     if (!expectTrue(!m.over(), "initial game must not be over", detail)) return false;
 
     // 非法落子不应改变任何状态
@@ -355,14 +361,15 @@ bool testMatchKernel(std::string& detail) {
 
     // 正常落子与换手
     if (!expectTrue(m.applyMove(7, 7), "legal move must succeed", detail)) return false;
-    if (!expectTrue(m.turn() == ChessType::White, "turn must switch to White", detail)) return false;
+    if (!expectTrue(m.turn() == gomoku::Stone::White, "turn must switch to White", detail)) return false;
     if (!expectTrue(m.moveCount() == 1, "move count must be 1", detail)) return false;
     if (!expectTrue(!m.applyMove(7, 7), "occupied cell must fail", detail)) return false;
 
-    // 撤销一手应回到黑方回合
-    m.undoLastMove(7, 7);
-    if (!expectTrue(m.turn() == ChessType::Black, "undo must restore Black turn", detail)) return false;
+    // 撤销一手应回到黑方回合（新版按历史重建棋盘）
+    if (!expectTrue(m.undo(1) == 1, "undo must remove one move", detail)) return false;
+    if (!expectTrue(m.turn() == gomoku::Stone::Black, "undo must restore Black turn", detail)) return false;
     if (!expectTrue(m.moveCount() == 0, "undo must restore move count", detail)) return false;
+    if (!expectTrue(board.stoneCount() == 0, "undo must clear the board", detail)) return false;
 
     // 构造黑方五连取胜：黑 (0,0..4)，白在别处应对
     auto mv = [&](int r, int c, bool expectOk, const std::string& what) {
@@ -379,37 +386,64 @@ bool testMatchKernel(std::string& detail) {
     if (!mv(0, 4, true,  "black (0,4) wins"))     return false;
 
     if (!expectTrue(m.over(), "game must be over after five in a row", detail)) return false;
-    if (!expectTrue(m.winner() == ChessType::Black, "Black must be the winner", detail)) return false;
-    if (!expectTrue(!m.isDraw(), "five in a row must not be a draw", detail)) return false;
+    if (!expectTrue(m.winner() == gomoku::Stone::Black, "Black must be the winner", detail)) return false;
     if (!expectTrue(!m.applyMove(5, 5), "no move allowed after game over", detail)) return false;
 
     return true;
 }
 
 // ===========================================================================
-// T9 首手中心兜底：空棋盘时 TacticalMax / MinimaxPP 必须直接走中心，
-// 否则 genCands 退化为全盘扫描 → 搜索爆炸 → 界面卡死。
-// ===========================================================================
+// T9 首手必须落在中心区，否则 genCands 退化为全盘扫描 → 搜索爆炸 → 界面卡死。
+//
+// 【为什么不再断言"正好是天元"】
+//   Player::openingMove() 的既定设计是：首手在棋盘中心、边长 n/3+1 的正方形内
+//   均匀真随机（见 engine/player.cpp 的注释：纯全盘随机会让角落首手几乎必败，
+//   固定天元又会让 AI 之间盘盘雷同）。因此"必须正好走天元"与设计直接矛盾 ——
+//   这个用例只会在中心恰好被随机到时通过（15 路上约 1/36），属于长期假失败。
+//   真正要守住的契约是：首手合法、且在中心区内、且不触发全盘搜索。
 bool testFirstMoveCenter(std::string& detail) {
     Judge judge;
-    auto board = makeBoard(15, 5);
+    const int n = 15;
+    const int len = n / 3 + 1;          // 与 openingMove 一致
+    const int start = (n - len) / 2;
+    const int end = start + len;        // 半开区间 [start, end)
+
+    auto inCenter = [&](const Pos& p) {
+        return p.r >= start && p.r < end && p.c >= start && p.c < end;
+    };
 
     // TacticalMax 首手
     {
+        auto board = makeBoard(n, 5);
         TacticalMax tm(judge);
-        Pos p = tm.place(*board, ChessType::Black);   // 走公共接口，内部委托 chooseMove
+        const Pos p = tm.place(*board, ChessType::Black);
         if (!expectTrue(p.valid(), "TacticalMax first move must be valid", detail)) return false;
-        int center = 15 / 2;
-        if (!expectTrue(p.r == center && p.c == center, "TacticalMax first move must be center", detail)) return false;
+        if (!expectTrue(inCenter(p), "TacticalMax first move must be inside the center square",
+                        detail)) return false;
     }
 
     // MinimaxPP 首手
     {
+        auto board = makeBoard(n, 5);
         MinimaxPP mm(judge);
-        Pos p = mm.place(*board, ChessType::Black);
+        const Pos p = mm.place(*board, ChessType::Black);
         if (!expectTrue(p.valid(), "MinimaxPP first move must be valid", detail)) return false;
-        int center = 15 / 2;
-        if (!expectTrue(p.r == center && p.c == center, "MinimaxPP first move must be center", detail)) return false;
+        if (!expectTrue(inCenter(p), "MinimaxPP first move must be inside the center square",
+                        detail)) return false;
+    }
+
+    // 多次首手必须落在中心区内（随机但不跑偏）
+    {
+        auto board = makeBoard(n, 5);
+        TacticalMax tm(judge);
+        for (int i = 0; i < 20; ++i) {
+            const Pos p = tm.place(*board, ChessType::Black);
+            if (!expectTrue(p.valid() && inCenter(p),
+                            "repeated first moves must stay inside the center square",
+                            detail)) {
+                return false;
+            }
+        }
     }
 
     return true;

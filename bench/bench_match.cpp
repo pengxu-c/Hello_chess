@@ -2,129 +2,150 @@
 // bench_match.cpp - 自动对弈执行与统计实现
 // 设计要点见 bench_match.h 头部。本文件不含任何 AI 算法实现。
 // ============================================================================
-
 #include "bench_match.h"
 
-#include "../player.h"
-#include "../tactical_max.h"
-#include "../ui.h"
-#include "../player_registry.h"
+#include "../contracts/PlayerRegistry.h"
+#include "../kernel/GomokuRules.h"
+#include "../kernel/MatchState.h"
+#include "../kernel/SquareBoard.h"
 
 #include <algorithm>
 #include <chrono>
-#include <random>
+#include <cstdio>
 
-// 显示名 / 可用编号 / 构建统一委托给玩家注册表（唯一注册点见 player_registry.cpp）
-const char* playerIdName(int id) {
-    const PlayerInfo* p = playerRegistry().find(id);
-    return p ? p->idName.c_str() : "Unknown";
-}
+namespace gomoku {
 
-const std::vector<int>& benchPlayerIds() {
-    static const std::vector<int> ids = [] {
-        std::vector<int> v;
-        for (const PlayerInfo& info : playerRegistry().catalog())
-            if (info.playable) v.push_back(info.id);
-        return v;
-    }();
+std::vector<std::string> benchPlayerIds() {
+    std::vector<std::string> ids;
+    std::vector<PlayerInfo> catalog = playerCatalog();
+    ids.reserve(catalog.size());
+    for (const auto& p : catalog) {
+        if (p.human) continue;                 // 需要交互
+        if (!p.fallbackId.empty()) continue;    // 依赖外部配置（API AI）
+        if (!p.ready) continue;
+        ids.push_back(p.id);
+    }
     return ids;
 }
 
-bool isPlayableId(int id) {
-    return playerRegistry().isPlayable(id);
+std::string benchPlayerName(const std::string& id) {
+    return playerRegistry().displayOf(id);
 }
 
-std::unique_ptr<Player> createPlayerById(int id, Judge& judge, UI*) {
-    if (!playerRegistry().isPlayable(id)) return nullptr;
-    PlayerContext ctx{ &judge, nullptr, nullptr };
-    return playerRegistry().create(id, ctx);
+bool isBenchPlayable(const std::string& id) {
+    const std::vector<std::string> ids = benchPlayerIds();
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
 namespace {
-
-// 时间预算只对暴露了该接口的棋手生效（TacticalMax）
-void applyBudget(Player* p, int budgetMs) {
-    if (budgetMs <= 0) return;
-    if (auto* tm = dynamic_cast<TacticalMax*>(p)) tm->setTimeBudgetMs(budgetMs);
-}
 
 double msBetween(const std::chrono::steady_clock::time_point& a,
                  const std::chrono::steady_clock::time_point& b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
 }
 
+// 固定开局（天元）。cfg.fixedOpening 为真时保证可复现。
+Coord openingMove(const MatchConfig& cfg) {
+    if (cfg.fixedOpening) return Coord{ cfg.boardSize / 2, cfg.boardSize / 2 };
+
+    // 中心正方形内按 seed 取点：与旧实现同风格，但用 splitmix64 保证跨平台一致
+    uint64_t s = cfg.seed * 0x9E3779B97F4A7C15ULL + 0x2545F4914F6CDD1DULL;
+    auto next = [&s]() {
+        s ^= s >> 12; s ^= s << 25; s ^= s >> 27;
+        return s * 0x2545F4914F6CDD1DULL;
+    };
+    const int span = std::max(1, cfg.boardSize / 3 + 1);
+    const int base = (cfg.boardSize - span) / 2;
+    const int r = base + static_cast<int>(next() % static_cast<unsigned>(span));
+    const int c = base + static_cast<int>(next() % static_cast<unsigned>(span));
+    return Coord{ r, c };
+}
+
 }  // namespace
 
-GameRecord playOneGame(const MatchConfig& cfg, Player& p1, Player& p2) {
+// ============================================================================
+// 下一整局：内核只负责规则，棋手来自插件注册表。
+// ============================================================================
+GameRecord playOneGame(const MatchConfig& cfg, IPlayer& p1, IPlayer& p2) {
     GameRecord rec;
-    Judge judge;
 
-    Board board;
-    board.resize(cfg.boardSize);
-    board.setWinLen(cfg.winLen);
+    SquareBoard board;
+    GomokuRules rules;
+    MatchState match(board, rules);
+    match.reset(RulesConfig{ cfg.boardSize, cfg.winLen });
 
-    const int maxMoves = cfg.boardSize * cfg.boardSize;
-
-    // ---- 开局 ----
-    int firstR = cfg.boardSize / 2, firstC = cfg.boardSize / 2;
-    if (!cfg.fixedOpening) {                      // 中心区随机起点
-        std::mt19937 rng(cfg.seed);
-        const int span = std::max(1, cfg.boardSize / 3 + 1);
-        firstR = static_cast<int>(rng() % static_cast<unsigned>(span)) + (cfg.boardSize - span) / 2;
-        firstC = static_cast<int>(rng() % static_cast<unsigned>(span)) + (cfg.boardSize - span) / 2;
-    }
-    if (!board.place(firstR, firstC, ChessType::Black)) {
+    // ---- 开局：黑先，固定或随机 ----
+    const Coord first = openingMove(cfg);
+    if (!match.applyMove(first.r, first.c)) {
         rec.aborted = true;
         rec.note = "opening move rejected";
         return rec;
     }
+    rec.moves.push_back(first);
     rec.moveCount = 1;
-    rec.moves.push_back({ firstR, firstC });
 
-    ChessType turn = ChessType::White;
-    while (rec.moveCount < maxMoves) {
-        Player& actor = (turn == ChessType::Black) ? p1 : p2;
+    const ThinkBudget budget{ cfg.budgetMs, cfg.budgetMs <= 0 };
+    const int maxMoves = cfg.boardSize * cfg.boardSize;
+
+    while (rec.moveCount < maxMoves && !match.over()) {
+        IPlayer& actor = (match.turn() == Stone::Black) ? p1 : p2;
+        const Stone who = match.turn();
+
+        // 棋手只看到只读快照 —— 与产品运行时完全一致的那条路径
+        ViewState view;
+        view.boardSize = match.board().size();
+        view.winLength = match.rules().winLength;
+        view.cells = match.board().toCells();
+        view.turn = who;
+        view.moveCount = match.moveCount();
+        view.history = match.history();
 
         const auto t0 = std::chrono::steady_clock::now();
-        const Pos mv = actor.place(board, turn);
+        const Decision d = actor.tick(view, budget);
         const double cost = msBetween(t0, std::chrono::steady_clock::now());
 
-        if (!mv.valid() || !board.place(mv.r, mv.c, turn)) {
+        if (!d.ok) {
             rec.aborted = true;
-            rec.note = std::string("illegal move from ") +
-                       ((turn == ChessType::Black) ? "black" : "white");
+            rec.note = actor.displayName() + " gave no move: " +
+                       (d.reason.empty() ? "unknown" : d.reason);
             break;
         }
-        ++rec.moveCount;
-        rec.moves.push_back(mv);
+        if (!match.applyMove(d.move.r, d.move.c)) {
+            rec.aborted = true;
+            rec.note = actor.displayName() + " returned an illegal move";
+            break;
+        }
 
-        if (turn == ChessType::Black) {
+        ++rec.moveCount;
+        rec.moves.push_back(Coord{ d.move.r, d.move.c });
+
+        if (who == Stone::Black) {
             rec.blackTotalMs += cost;
             rec.blackMaxMs = std::max(rec.blackMaxMs, cost);
         } else {
             rec.whiteTotalMs += cost;
             rec.whiteMaxMs = std::max(rec.whiteMaxMs, cost);
         }
-
-        if (judge.checkWin(board, mv, turn)) { rec.winner = turn; break; }
-        if (board.isFull()) break;
-        turn = opponent(turn);
     }
+
+    rec.winner = match.over() ? match.winner() : Stone::Empty;
     return rec;
 }
 
 MatchSummary runMatch(const MatchConfig& cfg, bool verbose) {
-    Judge judge;
     MatchSummary sum;
     int finished = 0;
 
-    for (int g = 0; g < cfg.games; ++g) {
-        auto p1 = createPlayerById(cfg.p1, judge, nullptr);
-        auto p2 = createPlayerById(cfg.p2, judge, nullptr);
-        if (!p1 || !p2) { ++sum.aborted; continue; }
+    const PlayerContext ctx{ nullptr, cfg.boardSize, cfg.winLen, cfg.budgetMs };
 
-        applyBudget(p1.get(), cfg.budgetMs);
-        applyBudget(p2.get(), cfg.budgetMs);
+    for (int g = 0; g < cfg.games; ++g) {
+        PlayerPtr p1 = createPlayer(cfg.p1, ctx, nullptr);
+        PlayerPtr p2 = createPlayer(cfg.p2, ctx, nullptr);
+        if (!p1 || !p2) {
+            ++sum.aborted;
+            if (verbose) std::printf("  game %2d: ABORTED (player plugin unavailable)\n", g + 1);
+            continue;
+        }
 
         const GameRecord rec = playOneGame(cfg, *p1, *p2);
         ++sum.games;
@@ -135,9 +156,9 @@ MatchSummary runMatch(const MatchConfig& cfg, bool verbose) {
             continue;
         }
 
-        if (rec.winner == ChessType::Black)      ++sum.p1Wins;
-        else if (rec.winner == ChessType::White) ++sum.p2Wins;
-        else                                     ++sum.draws;
+        if (rec.winner == Stone::Black)      ++sum.p1Wins;
+        else if (rec.winner == Stone::White) ++sum.p2Wins;
+        else                                 ++sum.draws;
 
         const int bMoves = (rec.moveCount + 1) / 2;
         const int wMoves = rec.moveCount / 2;
@@ -155,8 +176,8 @@ MatchSummary runMatch(const MatchConfig& cfg, bool verbose) {
         if (verbose) {
             std::printf("  game %2d: %-6s | %3d moves | black %7.1fms | white %7.1fms\n",
                         g + 1,
-                        (rec.winner == ChessType::Black) ? "BLACK" :
-                        (rec.winner == ChessType::White) ? "WHITE" : "DRAW",
+                        (rec.winner == Stone::Black) ? "BLACK" :
+                        (rec.winner == Stone::White) ? "WHITE" : "DRAW",
                         rec.moveCount, rec.blackTotalMs, rec.whiteTotalMs);
         }
     }
@@ -170,3 +191,5 @@ MatchSummary runMatch(const MatchConfig& cfg, bool verbose) {
     }
     return sum;
 }
+
+}  // namespace gomoku

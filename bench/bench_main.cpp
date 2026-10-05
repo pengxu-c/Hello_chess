@@ -4,16 +4,17 @@
 // 用途：给开发者与 agent 做「棋力 / 正确性回归」的命令行工具。
 // 设计原则：
 //   * 纯文本、零交互、无 UI、无网络 —— 可随时在 CI 或本地命令行重跑；
-//   * 每条输出同时打到控制台与日志（out/ 目录），便于长期留存与复盘；
-//   * 日志含完整棋谱坐标，失败时可直接还原整盘棋。
+//   * 每条输出同时打到控制台与日志（clattervault/ 目录），便于长期留存与复盘；
+//   * 日志含完整棋谱坐标，失败时可直接还原整盘棋；
+//   * 棋手来自与产品相同的插件注册表（gomoku::IPlayer），不另建一套编号映射。
 //
 // 用法：
 //   bench --list
 //   bench --selftest
-//   bench --p1 7 --p2 5 --games 10 --budget 1500
-//   bench --p1 7 --p2 4 --size 20 --winlen 6 --games 6
-//   bench --p1 5 --p2 7 --random-open
-//   bench --p1 7 --p2 5 --out <path>
+//   bench --p1 tactical-max --p2 minimax --games 10 --budget 1500
+//   bench --p1 tactical-max --p2 puregreed-1.1 --size 20 --winlen 6 --games 6
+//   bench --p1 minimax --p2 tactical-max --random-open
+//   bench --p1 tactical-max --p2 minimax --out <path>
 //
 // 日志目录默认写在相对路径 <cwd>/clattervault/ 下
 // （"clatter" = 棋子落盘的清脆声响，vault = 归档地）。
@@ -23,9 +24,11 @@
 #include "bench_match.h"
 #include "bench_selftest.h"
 
-#include "../core.h"
-#include "../player.h"
+#include "../contracts/PlayerRegistry.h"   // createPlayer / PlayerContext
+#include "../engine/core.h"
+#include "../engine/player.h"
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -43,6 +46,9 @@
 #endif
 
 namespace {
+
+using gomoku::Coord;
+using gomoku::Stone;
 
 // ---------------------------------------------------------------------------
 // 同时输出到控制台与日志文件的记录器
@@ -93,11 +99,11 @@ std::string colLabel(int c) {
     return s;
 }
 
-std::string moveLabel(const Pos& p) {
+std::string moveLabel(const Coord& p) {
     return colLabel(p.c) + std::to_string(p.r + 1);
 }
 
-std::string joinMoves(const std::vector<Pos>& moves) {
+std::string joinMoves(const std::vector<Coord>& moves) {
     std::string s;
     for (size_t i = 0; i < moves.size(); ++i) {
         if (i > 0) s += " ";
@@ -105,6 +111,12 @@ std::string joinMoves(const std::vector<Pos>& moves) {
         if (s.size() > 4000) { s += " ..."; break; }   // 超长棋谱截断，防止日志膨胀
     }
     return s;
+}
+
+std::string winnerLabel(Stone s) {
+    if (s == Stone::Black) return "BLACK";
+    if (s == Stone::White) return "WHITE";
+    return "DRAW ";
 }
 
 void printUsage() {
@@ -115,8 +127,8 @@ void printUsage() {
         "  bench --p1 <id> --p2 <id> [options]\n"
         "\n"
         "Options:\n"
-        "  --p1 <id>        first player (black), default 7\n"
-        "  --p2 <id>        second player (white), default 5\n"
+        "  --p1 <id>        first player (black), default tactical-max\n"
+        "  --p2 <id>        second player (white), default minimax\n"
         "  --games <n>      number of games, default 10\n"
         "  --budget <ms>    per-move time budget, default 1500\n"
         "  --size <n>       board size, default 15\n"
@@ -124,14 +136,15 @@ void printUsage() {
         "  --random-open    random opening instead of fixed center\n"
         "  --seed <n>       random seed used by --random-open\n"
         "  --out <path>     log directory (relative), default 'clattervault'\n"
-        "\n");
+        "\n"
+        "Player ids are plugin ids; use --list to see them.\n");
 }
 
 void printPlayerList() {
-    std::printf("Playable IDs for bench:\n");
-    for (int id : benchPlayerIds())
-        std::printf("  %d  %s\n", id, playerIdName(id));
-    std::printf("\nNote: 1=Human and 6=API AI are excluded (need interaction / network).\n");
+    std::printf("Playable players for bench (plugin ids):\n");
+    for (const std::string& id : gomoku::benchPlayerIds())
+        std::printf("  %-16s %s\n", id.c_str(), gomoku::benchPlayerName(id).c_str());
+    std::printf("\nNote: 'human' and 'api-ai' are excluded (interaction / network).\n");
 }
 
 }  // namespace
@@ -139,18 +152,21 @@ void printPlayerList() {
 int main(int argc, char** argv) {
     bool selftest = false, listOnly = false, randomOpen = false;
     std::string outDir = "clattervault";
-    MatchConfig cfg;
+    gomoku::MatchConfig cfg;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto nextInt = [&]() -> int {
             return (i + 1 < argc) ? std::atoi(argv[++i]) : 0;
         };
+        auto nextStr = [&]() -> std::string {
+            return (i + 1 < argc) ? std::string(argv[++i]) : std::string();
+        };
         if (a == "--selftest")          selftest = true;
         else if (a == "--list")         listOnly = true;
         else if (a == "--random-open")  randomOpen = true;
-        else if (a == "--p1")           cfg.p1 = nextInt();
-        else if (a == "--p2")           cfg.p2 = nextInt();
+        else if (a == "--p1")           cfg.p1 = nextStr();
+        else if (a == "--p2")           cfg.p2 = nextStr();
         else if (a == "--games")        cfg.games = nextInt();
         else if (a == "--budget")       cfg.budgetMs = nextInt();
         else if (a == "--size")         cfg.boardSize = nextInt();
@@ -172,8 +188,7 @@ int main(int argc, char** argv) {
     // ---- 输出目录 ----
     MK_DIR(outDir.c_str());
     const std::string logName = outDir + "/chronicle-" + nowStamp("%Y%m%d-%H%M%S")
-                              + "-p" + std::to_string(cfg.p1) + "v" + std::to_string(cfg.p2)
-                              + ".log";
+                              + "-" + cfg.p1 + "-vs-" + cfg.p2 + ".log";
     Chronicle log(logName);
     if (!log.ok())
         std::printf("[warn] cannot create log file: %s (console only)\n", logName.c_str());
@@ -202,8 +217,8 @@ int main(int argc, char** argv) {
     }
 
     // ================= 对弈模式 =================
-    if (!isPlayableId(cfg.p1) || !isPlayableId(cfg.p2)) {
-        std::printf("Invalid player id. Use --list to see available IDs.\n");
+    if (!gomoku::isBenchPlayable(cfg.p1) || !gomoku::isBenchPlayable(cfg.p2)) {
+        std::printf("Invalid player id. Use --list to see available ids.\n");
         return 2;
     }
     if (cfg.winLen > cfg.boardSize) {
@@ -211,21 +226,26 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    Judge judge;
     log.line("mode     : match");
-    log.line("players  : BLACK(#%d %s)  vs  WHITE(#%d %s)",
-             cfg.p1, playerIdName(cfg.p1), cfg.p2, playerIdName(cfg.p2));
+    log.line("players  : BLACK(%s)  vs  WHITE(%s)",
+             cfg.p1.c_str(), cfg.p2.c_str());
     log.line("board    : %d x %d, winlen %d", cfg.boardSize, cfg.boardSize, cfg.winLen);
     log.line("budget   : %d ms/move, games %d, opening %s",
              cfg.budgetMs, cfg.games, cfg.fixedOpening ? "fixed-center" : "random");
     log.line("------------------------------------------------");
 
-    MatchSummary sum;
+    gomoku::MatchSummary sum;
     for (int g = 0; g < cfg.games; ++g) {
-        auto p1 = createPlayerById(cfg.p1, judge, nullptr);
-        auto p2 = createPlayerById(cfg.p2, judge, nullptr);
+        const gomoku::PlayerContext ctx{ nullptr, cfg.boardSize, cfg.winLen, cfg.budgetMs };
+        auto p1 = gomoku::createPlayer(cfg.p1, ctx, nullptr);
+        auto p2 = gomoku::createPlayer(cfg.p2, ctx, nullptr);
+        if (!p1 || !p2) {
+            ++sum.aborted;
+            log.line("game %2d  | ABORTED (player plugin unavailable)", g + 1);
+            continue;
+        }
 
-        const GameRecord rec = playOneGame(cfg, *p1, *p2);
+        const gomoku::GameRecord rec = gomoku::playOneGame(cfg, *p1, *p2);
         ++sum.games;
 
         if (rec.aborted) {
@@ -234,9 +254,9 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        if (rec.winner == ChessType::Black)      ++sum.p1Wins;
-        else if (rec.winner == ChessType::White) ++sum.p2Wins;
-        else                                     ++sum.draws;
+        if (rec.winner == Stone::Black)      ++sum.p1Wins;
+        else if (rec.winner == Stone::White) ++sum.p2Wins;
+        else                                 ++sum.draws;
 
         const int bMoves = (rec.moveCount + 1) / 2;
         const int wMoves = rec.moveCount / 2;
@@ -249,9 +269,7 @@ int main(int argc, char** argv) {
         sum.p2MaxMs   = std::max(sum.p2MaxMs, rec.whiteMaxMs);
 
         log.line("game %2d  | winner %-6s | %3d moves | black avg %7.1fms max %7.1fms | white avg %7.1fms max %7.1fms",
-                 g + 1,
-                 (rec.winner == ChessType::Black) ? "BLACK" :
-                 (rec.winner == ChessType::White) ? "WHITE" : "DRAW ",
+                 g + 1, winnerLabel(rec.winner).c_str(),
                  rec.moveCount, bAvg, rec.blackMaxMs, wAvg, rec.whiteMaxMs);
         log.line("          | moves: %s", joinMoves(rec.moves).c_str());
     }
@@ -265,8 +283,8 @@ int main(int argc, char** argv) {
     }
 
     log.line("------------------------------------------------");
-    log.line("summary  : BLACK(#%d %s) %d W / %d L / %d D   rate %.1f%%",
-             cfg.p1, playerIdName(cfg.p1), sum.p1Wins, sum.p2Wins, sum.draws, sum.winRate * 100.0);
+    log.line("summary  : BLACK(%s) %d W / %d L / %d D   rate %.1f%%",
+             cfg.p1.c_str(), sum.p1Wins, sum.p2Wins, sum.draws, sum.winRate * 100.0);
     log.line("           avg moves %.1f | black avg %7.1fms max %7.1fms | white avg %7.1fms max %7.1fms",
              sum.avgMoves, sum.p1AvgMs, sum.p1MaxMs, sum.p2AvgMs, sum.p2MaxMs);
     if (sum.aborted > 0) log.line("           aborted games: %d", sum.aborted);
@@ -274,3 +292,4 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
