@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.15)
-project(Hello_chess)
+# 工程名 = 输出 exe 名（用户要求）。
+# 注意：CMake 默认输出 ${PROJECT_NAME}.exe，所以改名后
+# 下面那行 OUTPUT_NAME 就成了冗余，但保留无害且更明确。
+project(hello_chess)
 set(X_VCPKG_APPLOCAL_DEPS_INSTALL ON)
 set(CMAKE_CXX_STANDARD 17)
 if(MSVC)
@@ -48,6 +51,11 @@ set(GOMOKU_CORE_SOURCES
     plugins/ViewRegistry.cpp
     plugins/views/CliView.cpp
     plugins/views/WebView.cpp
+    plugins/views/EasyXView.cpp
+
+    # ---- 旧版 EasyX 界面（2026-09 原件，从 git 取回，逻辑未改）----
+    # 它面向旧引擎（Board/Pos），由 plugins/views/EasyXView.cpp 做类型适配。
+engine/legacy_easyx/ui.cpp
 
     # ---- 插件：存储 ----
     plugins/storage/LegacyStorageGateway.cpp
@@ -73,32 +81,88 @@ set(GOMOKU_CORE_SOURCES
     engine/storage.cpp
 )
 
-add_executable(Gomoku ${GOMOKU_CORE_SOURCES})
+# ============================================================================
+#  EasyX 图形窗口界面（界面插件，--view easyx）
+#
+#  【为什么只加 include 目录、不加 link_libraries】
+#  EasyX 被安装在 MSVC 的集成目录里，它的 easyx.h 内部写着：
+#      #pragma comment(lib, "EasyXw.lib")
+#      #pragma comment(lib, "EasyXa.lib")
+#  这是 MSVC 特有指令，链接器会自动去对应目录找这两个 .lib。
+#  所以只要头文件能被找到，链接就自动完成 —— 这正是 EasyX
+#  "不需要配置链接器" 的由来。
+#
+#  【路径里有空格】
+#  "Visual studio" 含空格，CMake 里必须加引号，否则会被拆成两个参数。
+#  路径不存在时不会报错：include 目录找不到只是编译该文件时报缺头文件，
+#  不影响其它目标（bench 不含 EasyXView）。
+# ============================================================================
+set(EASYX_INCLUDE_DIR "$ENV{EASYX_LOCAL_PATH}/include"
+    "D:/Visual studio/VS2022/VC/Auxiliary/VS/include"
+    "C:/Program Files (x86)/EasyX/include"
+    "C:/EasyX/include"
+)
+set(EASYX_FOUND "")
+foreach(dir IN LISTS EASYX_INCLUDE_DIR)
+    if(EXISTS "${dir}/easyx.h")
+        set(EASYX_FOUND "${dir}")
+        break()
+    endif()
+endforeach()
+if(EASYX_FOUND)
+    message(STATUS "已找到 EasyX 头文件: ${EASYX_FOUND}")
+else()
+    message(STATUS "未找到 easyx.h —— 界面插件 easyx 将无法编译，"
+                   "其余功能不受影响（可设置 EASYX_LOCAL_PATH 环境变量指定路径）")
+endif()
+
+add_executable(hello_chess ${GOMOKU_CORE_SOURCES})
+
+# ============================================================================
+#  输出文件名：hello_chess.exe
+#
+#  【为什么只改 OUTPUT_NAME，不改目标名】
+#   目标名（Gomoku）用于构建期，输出名（hello_chess.exe）用于交付。
+#   分开的好处：install/打包脚本按 hello_chess.exe 找，代码里的日志与
+#   报错仍然知道自己在构建 Gomoku 这个目标，两边都不别扭。
+#
+#  【想改回 Gomoku.exe】
+#   把下面这行删掉即可，CMake 默认输出 ${PROJECT_NAME}.exe。
+# ============================================================================
+# 输出名与工程名一致，这行其实可省略（CMake 默认用 ${PROJECT_NAME}），
+# 保留是为了让"exe 叫什么"这件事在这里显式可见。
+set_target_properties(hello_chess PROPERTIES OUTPUT_NAME "hello_chess")
 
 # 【为什么用控制台子系统，而不是 Windows 子系统】
 #   实测：Windows 子系统（WIN32_EXECUTABLE TRUE）下，--list / --selfplay 这类
 #   "打印后退出"的模式输出为空、退出码 0xC0000005，重定向到文件也是空文件。
 #   控制台子系统下同样命令一切正常，且可以被 CI 断言。
-#   于是这里用控制台子系统，并由 main_microkernel.cpp 在 Web 模式下主动隐藏
-#   控制台窗口，达到"双击不弹黑框"的相同体验（见 hideConsoleWindowIfOwned()）。
-set_target_properties(Gomoku PROPERTIES WIN32_EXECUTABLE FALSE)
+#   控制台一律保留可见（用户明确要求）：关掉控制台窗口就是退出程序。
+set_target_properties(hello_chess PROPERTIES WIN32_EXECUTABLE FALSE)
 
-target_include_directories(Gomoku PRIVATE
+target_include_directories(hello_chess PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 
-target_compile_definitions(Gomoku PRIVATE UNICODE _UNICODE)
+# EasyX 头文件（easyx.h 内部用 #pragma comment(lib) 自动链接 EasyXw/EasyXa，
+# 因此这里只给头文件路径即可，不要 target_link_libraries）。
+# 见上文"EasyX 图形窗口界面"一节对 EASYX_FOUND 的说明。
+if(EASYX_FOUND)
+    target_include_directories(hello_chess PRIVATE ${EASYX_FOUND})
+endif()
+
+target_compile_definitions(hello_chess PRIVATE UNICODE _UNICODE)
 
 # 源码根锚点：编译期把"源码在哪"固化进 exe。
 # 有了它，运行时定位 webapp/ 与 contracts/ 不再依赖当前工作目录，
 # exe 被拷到任何位置、从任何目录启动都能正确找到资源。
-target_compile_definitions(Gomoku PRIVATE
+target_compile_definitions(hello_chess PRIVATE
     GOMOKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
 # ws2_32：cpp-httplib 在 Windows 下依赖 Winsock
-target_link_libraries(Gomoku PRIVATE
+target_link_libraries(hello_chess PRIVATE
     ws2_32
     CURL::libcurl
     nlohmann_json::nlohmann_json
@@ -181,17 +245,17 @@ if(_curl_imported)
     endif()
 endif()
 
-add_custom_command(TARGET Gomoku POST_BUILD
+add_custom_command(TARGET hello_chess POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_CURRENT_SOURCE_DIR}/webapp
-            $<TARGET_FILE_DIR:Gomoku>/webapp
-    COMMENT "Copying webapp/ next to Gomoku.exe"
+            $<TARGET_FILE_DIR:hello_chess>/webapp
+    COMMENT "Copying webapp/ next to hello_chess.exe"
 )
 
 if(GOMOKU_RUNTIME_DLLS)
-    add_custom_command(TARGET Gomoku POST_BUILD
+    add_custom_command(TARGET hello_chess POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${GOMOKU_RUNTIME_DLLS} $<TARGET_FILE_DIR:Gomoku>
-        COMMENT "Copying runtime DLLs (libcurl etc.) next to Gomoku.exe"
+                ${GOMOKU_RUNTIME_DLLS} $<TARGET_FILE_DIR:hello_chess>
+        COMMENT "Copying runtime DLLs (libcurl etc.) next to hello_chess.exe"
     )
 endif()

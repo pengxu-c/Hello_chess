@@ -17,6 +17,7 @@
 //
 #include "../contracts/ViewRegistry.h"
 #include "views/CliView.h"
+#include "views/EasyXView.h"
 #include "views/WebView.h"
 
 namespace gomoku {
@@ -40,11 +41,27 @@ void registerBuiltinViews(ViewRegistry& reg) {
                 return view;
             });
 
+    // ---- EasyX 图形窗口：本地原生窗口，无需浏览器/端口 ----
+    // 注意工厂里必须在这里 open()：IView 没有"生命周期钩子"，
+    // 而窗口必须在构造完成后立刻创建，否则第一次 poll() 会在未初始化的
+    // 绘图上下文里画东西。创建失败则返回 nullptr —— main_microkernel.cpp
+    // 会自动把所有非 web 界面交给 CliHost，无需在这里或入口做任何判断。
+    reg.add(ViewInfo{ "easyx", "EasyX (window)",
+                      "原生图形窗口，鼠标点击落子（无需浏览器）" },
+            [](const ViewContext& ctx) -> std::unique_ptr<IView> {
+                auto view = std::make_unique<EasyXView>(ctx.headless);
+                if (!view->open()) return nullptr;
+                return view;
+            });
+
     // ==== 你的界面加在这里 ====
     // reg.add(ViewInfo{ "my-view", "My View", "一句话说明" },
     //         [](const ViewContext& ctx) -> std::unique_ptr<IView> {
     //             return std::make_unique<MyView>(ctx);
     //         });
+    //
+    // 加完就能用：`Gomoku.exe --view my-view`
+    // main_microkernel.cpp 与 hosts/CliHost.cpp 都不需要改动。
 }
 
 ViewRegistry& viewRegistry() {

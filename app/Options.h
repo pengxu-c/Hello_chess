@@ -12,7 +12,10 @@
 namespace gomoku {
 
 struct Options {
-    std::string view = "web";          // 使用哪个界面插件（见 --views 列表）
+    // 默认界面：easyx（原生图形窗口）。
+    // 想用其它界面：--view cli（终端）/ --view web（浏览器）。
+    // 想改默认值就改这一行。
+    std::string view = "easyx";         // 使用哪个界面插件（见 --views 列表）
     std::string black = "human";       // 黑方玩家插件 id
     std::string white = "minimax";     // 白方玩家插件 id
     RulesConfig rules;

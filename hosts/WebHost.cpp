@@ -29,7 +29,7 @@ int WebHost::run() {
     if (webRoot.empty()) {
         std::fprintf(stderr,
                      "cannot find webapp/index.html.\n"
-                     "expected a 'webapp' folder next to Gomoku.exe "
+                     "expected a 'webapp' folder next to hello_chess.exe "
                      "(or up to 4 levels above it).\n");
         return 1;
     }

@@ -124,9 +124,11 @@ void printPluginCatalog() {
     }
     std::printf(
         "\nExamples:\n"
-        "  Gomoku.exe                                   # browser UI, human vs AI\n"
-        "  Gomoku.exe --view cli --black human --white tactical-max\n"
-        "  Gomoku.exe --selfplay 2 --black tactical-max --white minimax --think 800\n");
+        "  hello_chess.exe                              # native window (EasyX), human vs AI\n"
+        "  hello_chess.exe --view cli                   # terminal UI\n"
+        "  hello_chess.exe --view web                   # browser UI\n"
+        "  hello_chess.exe --views                      # list all view plugins\n"
+        "  hello_chess.exe --selfplay 2 --black tactical-max --white minimax --think 800\n");
 }
 
 }  // namespace gomoku
