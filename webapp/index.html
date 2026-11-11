@@ -9,120 +9,222 @@
 <body>
   <!--
     ============================================================
-    前端界面 = 内核状态的可视化。
-    它只通过两个接口与后端对话：
-      GET  /api/events   SSE 推送内核状态快照（只读）
-      POST /api/cmd      { op: "...", ... } 发送一条命令（只写）
-    它不知道棋盘怎么存、玩家怎么算、有没有存储实现。
+    前端 = 内核状态的可视化。
+    只通过两个接口与后端对话：
+      GET  /api/events   SSE 推送只读快照
+      POST /api/cmd      { op, ... } 发送命令
+    改皮肤只需动本文件与 style.css，不需要重新编译 C++。
     ============================================================
   -->
   <div class="app">
     <header class="topbar">
-      <h1 class="brand">Gomoku <span class="brand-tag">microkernel</span></h1>
-      <div class="actions">
-        <span id="conn" class="badge badge--off">connecting</span>
-        <button id="btn-new" class="btn btn--primary">New Game</button>
-        <button id="btn-stats" class="btn">Stats</button>
-        <button id="btn-theme" class="btn btn--icon" title="Toggle theme (T)">&#9681;</button>
-        <button id="btn-quit" class="btn btn--danger">Quit</button>
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i>
+        </span>
+        <span class="brand-name">Gomoku</span>
+        <span class="brand-tag">microkernel</span>
+      </div>
+
+      <div class="topbar-actions">
+        <span id="conn" class="conn conn--off">
+          <span class="conn-dot"></span><span id="conn-text">connecting</span>
+        </span>
+
+        <button id="btn-new" class="btn btn--primary" title="New game (N)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9"/></svg>
+          <span class="btn-label">New game</span>
+        </button>
+        <button id="btn-undo" class="btn" title="Undo (U)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8a5 5 0 1 1 1.6 3.7M3 8V4.5M3 8h3.5"/></svg>
+          <span class="btn-label">Undo</span>
+        </button>
+        <button id="btn-flip" class="btn" title="Flip board (F)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 5.5h7l-2-2M12 10.5H5l2 2"/></svg>
+          <span class="btn-label">Flip</span>
+        </button>
+        <button id="btn-theme" class="btn btn--icon" title="Theme (T)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="4.2"/><path d="M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6"/></svg>
+        </button>
+        <button id="btn-quit" class="btn btn--icon btn--quiet-danger" title="Quit">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5H4.2A1.2 1.2 0 0 0 3 4.7v6.6a1.2 1.2 0 0 0 1.2 1.2H6M9.5 5.5 12 8l-2.5 2.5M12 8H6.5"/></svg>
+        </button>
       </div>
     </header>
 
-    <main class="board-wrap">
-      <div class="board-stage">
-        <canvas id="board" width="720" height="720"></canvas>
-        <div id="overlay" class="overlay hidden">
-          <div class="overlay-card">
-            <h2 id="overlay-title">Result</h2>
-            <p id="overlay-text"></p>
-            <div class="overlay-actions">
-              <button id="btn-again" class="btn btn--primary">New Game</button>
-              <button id="btn-close" class="btn">Close</button>
-            </div>
+    <main class="stage">
+      <div class="matchbar">
+        <div id="card-black" class="player player--black">
+          <span class="stone-dot stone-dot--black" aria-hidden="true"></span>
+          <span class="player-body">
+            <span class="player-role">Black</span>
+            <span id="meta-black" class="player-name">-</span>
+          </span>
+        </div>
+
+        <div class="match-center">
+          <div id="turn-box" class="turn">
+            <span class="turn-dot" aria-hidden="true"></span>
+            <span id="meta-turn">-</span>
+          </div>
+          <div class="match-sub">
+            <span id="meta-moves">0</span> moves
+            <span class="sep">·</span>
+            <span id="meta-size">-</span>
+            <span class="sep">·</span>
+            connect <span id="meta-connect">-</span>
+          </div>
+          <div id="thinking" class="thinking hidden" aria-hidden="true">
+            <span></span><span></span><span></span>
           </div>
         </div>
 
+        <div id="card-white" class="player player--white">
+          <span class="stone-dot stone-dot--white" aria-hidden="true"></span>
+          <span class="player-body">
+            <span class="player-role">White</span>
+            <span id="meta-white" class="player-name">-</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="board-stage">
+        <canvas id="board" width="840" height="840" aria-label="Gomoku board"></canvas>
+
         <div id="replay-bar" class="replay-bar hidden">
           <span class="replay-tag">REPLAY</span>
-          <button id="rp-first" class="btn btn--icon" title="First">&#8676;</button>
-          <button id="rp-prev" class="btn btn--icon" title="Previous">&#8249;</button>
-          <button id="rp-play" class="btn btn--icon" title="Play / Pause">&#9654;</button>
-          <button id="rp-next" class="btn btn--icon" title="Next">&#8250;</button>
-          <button id="rp-last" class="btn btn--icon" title="Last">&#8677;</button>
+          <button id="rp-first" class="btn btn--icon btn--small" title="First">&#8676;</button>
+          <button id="rp-prev" class="btn btn--icon btn--small" title="Previous">&#8249;</button>
+          <button id="rp-play" class="btn btn--icon btn--small btn--play" title="Play / Pause">&#9654;</button>
+          <button id="rp-next" class="btn btn--icon btn--small" title="Next">&#8250;</button>
+          <button id="rp-last" class="btn btn--icon btn--small" title="Last">&#8677;</button>
           <input id="rp-slider" type="range" min="0" max="0" value="0" step="1">
           <span id="rp-count" class="replay-count">0 / 0</span>
-          <button id="rp-exit" class="btn">Exit</button>
+          <button id="rp-exit" class="btn btn--small">Exit</button>
         </div>
+      </div>
+
+      <!-- 结果横幅放在棋盘外：不遮住刚赢的那五颗子 -->
+      <div id="overlay" class="result hidden">
+        <div class="result-text">
+          <span id="overlay-title">Result</span>
+          <span id="overlay-text"></span>
+        </div>
+        <div class="result-actions">
+          <button id="btn-again" class="btn btn--primary btn--small">Rematch</button>
+          <button id="btn-close" class="btn btn--small">Dismiss</button>
+        </div>
+      </div>
+
+      <div class="statusline">
+        <span id="meta-status" class="status-pill">Ready</span>
+        <span id="message" class="status-msg"></span>
       </div>
     </main>
 
     <aside class="panel">
-      <div class="row"><span class="label">Status</span><span id="meta-status" class="value">-</span></div>
-      <div class="row"><span class="label">Turn</span><span id="meta-turn" class="value">-</span></div>
-      <div class="row"><span class="label">Moves</span><span id="meta-moves" class="value">0</span></div>
-      <div class="row"><span class="label">Board</span><span id="meta-size" class="value">-</span></div>
-      <div class="row"><span class="label">Connect</span><span id="meta-connect" class="value">-</span></div>
-      <div class="row"><span class="label">Black</span><span id="meta-black" class="value">-</span></div>
-      <div class="row"><span class="label">White</span><span id="meta-white" class="value">-</span></div>
+      <section class="panel-card">
+        <h2 class="panel-title">Actions</h2>
+        <div class="action-grid">
+          <button id="btn-save" class="action" title="Save resume (S)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v7M5 7.5 8 10.5l3-3M3.5 12.5h9"/></svg>
+            <span>Save</span>
+          </button>
+          <button id="btn-load" class="action" title="Load a saved resume">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10V3M5 5.5 8 2.5l3 3M3.5 12.5h9"/></svg>
+            <span>Load</span>
+          </button>
+          <button id="btn-games" class="action" title="Replays (R)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="2"/><path d="M7 6.2 10 8l-3 1.8z"/></svg>
+            <span>Replays</span>
+          </button>
+          <button id="btn-stats" class="action" title="Statistics">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 12.5v-4M8 12.5v-7M12.5 12.5v-2.5"/></svg>
+            <span>Stats</span>
+          </button>
+          <button id="btn-abort" class="action action--danger" title="Resign this game">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m6.2 6.2 3.6 3.6M9.8 6.2l-3.6 3.6"/></svg>
+            <span>Resign</span>
+          </button>
+        </div>
+      </section>
 
-      <div class="panel-actions">
-        <button id="btn-undo" class="btn" title="Undo (U)">Undo</button>
-        <button id="btn-abort" class="btn btn--danger" title="Abort game">Abort</button>
-        <button id="btn-save" class="btn" title="Save resume (S)">Save</button>
-        <button id="btn-load" class="btn">Resumes</button>
-        <button id="btn-games" class="btn" title="Replays (R)">Replays</button>
-        <button id="btn-flip" class="btn">Flip</button>
-      </div>
-
-      <!-- 局中换人：直接演示"玩家是插件"这件事 -->
-      <div class="swap-box">
-        <div class="swap-title">Swap player mid-game</div>
+      <section class="panel-card">
+        <h2 class="panel-title">Players</h2>
         <div class="swap-row">
-          <span class="swap-seat">Black</span>
-          <select id="swap-black" class="swap-select"></select>
+          <span class="stone-dot stone-dot--black" aria-hidden="true"></span>
+          <select id="swap-black" class="select" aria-label="Black player"></select>
           <button id="btn-swap-black" class="btn btn--small">Set</button>
         </div>
         <div class="swap-row">
-          <span class="swap-seat">White</span>
-          <select id="swap-white" class="swap-select"></select>
+          <span class="stone-dot stone-dot--white" aria-hidden="true"></span>
+          <select id="swap-white" class="select" aria-label="White player"></select>
           <button id="btn-swap-white" class="btn btn--small">Set</button>
         </div>
-      </div>
+        <p class="panel-note">Swap takes effect mid-game.</p>
+      </section>
 
-      <p id="message" class="hint"></p>
-      <p class="hint hint--keys">Keys: N new &middot; U undo &middot; S save &middot; R replays &middot; T theme &middot; Esc close</p>
+      <section class="panel-card panel-card--keys">
+        <h2 class="panel-title">Shortcuts</h2>
+        <div class="key-row"><kbd>N</kbd> new game</div>
+        <div class="key-row"><kbd>U</kbd> undo</div>
+        <div class="key-row"><kbd>F</kbd> flip board</div>
+        <div class="key-row"><kbd>S</kbd> save</div>
+        <div class="key-row"><kbd>R</kbd> replays</div>
+        <div class="key-row"><kbd>T</kbd> theme</div>
+      </section>
     </aside>
   </div>
 
-  <!-- 新游戏对话框 -->
+  <!-- 新局设置：预设一档点下去就开局，不用记数字 -->
   <div id="modal-new" class="modal hidden">
     <div class="modal-card">
-      <h2>New Game</h2>
-      <label class="field">Board size
-        <input id="in-size" type="number" min="4" max="30" value="15">
-      </label>
-      <label class="field">Win length
-        <input id="in-win" type="number" min="4" max="15" value="5">
-      </label>
-      <label class="field">Black (first)
+      <h2>New game</h2>
+
+      <div class="presets" role="group" aria-label="Board presets">
+        <button class="preset" data-size="13" data-win="5">
+          <b>13 × 13</b><span>quick</span>
+        </button>
+        <button class="preset preset--on" data-size="15" data-win="5">
+          <b>15 × 15</b><span>classic</span>
+        </button>
+        <button class="preset" data-size="19" data-win="5">
+          <b>19 × 19</b><span>wide</span>
+        </button>
+      </div>
+
+      <div class="field-grid">
+        <label class="field">Board size
+          <input id="in-size" type="number" min="4" max="30" value="15">
+        </label>
+        <label class="field">Win length
+          <input id="in-win" type="number" min="4" max="15" value="5">
+        </label>
+      </div>
+
+      <label class="field">Black <span class="field-hint">moves first</span>
         <select id="sel-p1"></select>
       </label>
-      <label class="field">White (second)
+      <label class="field">White
         <select id="sel-p2"></select>
       </label>
-      <label class="field field--check">
-        <input id="in-storage" type="checkbox" checked> Enable memory storage
+
+      <label class="check">
+        <input id="in-storage" type="checkbox" checked>
+        <span>Remember this game</span>
       </label>
-      <p id="new-note" class="field-note hidden"></p>
-      <p id="new-error" class="field-error hidden"></p>
+
+      <p id="new-note" class="note hidden"></p>
+      <p id="new-error" class="note note--error hidden"></p>
+
       <div class="modal-actions">
-        <button id="btn-start" class="btn btn--primary">Start</button>
         <button id="btn-cancel" class="btn">Cancel</button>
+        <button id="btn-start" class="btn btn--primary">Start game</button>
       </div>
     </div>
   </div>
 
-  <!-- 列表 / 统计对话框 -->
+  <!-- 列表 / 统计 -->
   <div id="modal-list" class="modal hidden">
     <div class="modal-card modal-card--wide">
       <h2 id="list-title">List</h2>
@@ -133,7 +235,6 @@
     </div>
   </div>
 
-  <!-- 右下角轻提示 -->
   <div id="toast" class="toast hidden"></div>
 
   <script src="/app.js"></script>

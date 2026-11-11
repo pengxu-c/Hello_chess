@@ -17,13 +17,18 @@ const ctx = canvas.getContext('2d');
 
 const el = {
   conn: document.getElementById('conn'),
+  connText: document.getElementById('conn-text'),
   status: document.getElementById('meta-status'),
   turn: document.getElementById('meta-turn'),
+  turnBox: document.getElementById('turn-box'),
   moves: document.getElementById('meta-moves'),
   size: document.getElementById('meta-size'),
   connect: document.getElementById('meta-connect'),
   black: document.getElementById('meta-black'),
   white: document.getElementById('meta-white'),
+  cardBlack: document.getElementById('card-black'),
+  cardWhite: document.getElementById('card-white'),
+  thinking: document.getElementById('thinking'),
   message: document.getElementById('message'),
   overlay: document.getElementById('overlay'),
   overlayTitle: document.getElementById('overlay-title'),
@@ -108,7 +113,7 @@ async function api(path, body) {
 
 function toast(msg, kind) {
   el.toast.textContent = msg;
-  el.toast.className = 'toast show' + (kind ? ' toast--' + kind : '');
+  el.toast.className = 'toast' + (kind ? ' toast--' + kind : '');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.toast.className = 'toast hidden'; }, 2600);
 }
@@ -129,7 +134,15 @@ const label = (v) => (typeof v === 'string' ? v : (v && v.name) || '-');
 function readThemeColors() {
   const cs = getComputedStyle(document.documentElement);
   const get = (k) => cs.getPropertyValue(k).trim();
-  themeColors = { board: get('--board'), line: get('--board-line'), coord: get('--board-coord') };
+  themeColors = {
+    board: get('--board-1'),
+    board2: get('--board-2'),
+    line: get('--board-line'),
+    coord: get('--board-coord'),
+    ink: get('--ink'),
+    accent: get('--accent'),
+    brass: get('--brass'),
+  };
 }
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
@@ -142,6 +155,11 @@ function toggleTheme() {
   applyTheme(cur === 'dark' ? 'light' : 'dark');
 }
 function initTheme() {
+  const q = new URLSearchParams(location.search).get('theme');
+  if (q === 'dark' || q === 'light') {
+    applyTheme(q);
+    return;
+  }
   const saved = localStorage.getItem('gomoku-theme');
   const t = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   document.documentElement.setAttribute('data-theme', t);
@@ -151,7 +169,12 @@ function initTheme() {
 /* ---------- 几何 ---------- */
 function computeGeometry(n) {
   const size = canvas.width;
-  const margin = Math.round(size * 0.075);
+  // 基础留白按比例；再用棋子的实际半径反推一个下限：
+  // 小棋盘（如 9 路）格子大、棋子也大，固定 7.5% 会让最外圈棋子
+  // 压住 A/B/C 这些列标，所以这里取两者较大值。
+  const base = Math.round(size * 0.075);
+  const need = Math.ceil((0.84 * size + 12 * (n - 1)) / (n + 0.68));
+  const margin = Math.max(base, need);
   geometry = { margin, gap: (size - margin * 2) / (n - 1) };
 }
 function toDisplay(r, c, n) { return flipView ? [n - 1 - r, n - 1 - c] : [r, c]; }
@@ -171,16 +194,44 @@ function render() {
   computeGeometry(n);
   const { margin, gap } = geometry;
 
-  ctx.fillStyle = themeColors.board;
+  // 木纹底：斜向双层渐变 + 中心提亮，比纯色更像真实棋盘
+  const wood = ctx.createLinearGradient(0, 0, size, size);
+  wood.addColorStop(0, themeColors.board);
+  wood.addColorStop(.48, themeColors.board);
+  wood.addColorStop(1, themeColors.board2);
+  ctx.fillStyle = wood;
   ctx.fillRect(0, 0, size, size);
+
+  const glow = ctx.createRadialGradient(size * .38, size * .3, size * .05,
+                                        size * .5, size * .5, size * .78);
+  glow.addColorStop(0, 'rgba(255,255,255,.10)');
+  glow.addColorStop(.55, 'rgba(255,255,255,0)');
+  glow.addColorStop(1, 'rgba(60,40,15,.10)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, size, size);
+
+  // 极淡的斜纹，模拟木料纹理；透明度压到几乎看不见，只提供质感
+  ctx.save();
+  ctx.globalAlpha = .035;
+  ctx.strokeStyle = '#5b3d18';
+  ctx.lineWidth = 1;
+  for (let i = -size; i < size * 2; i += 26) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i + size, size);
+    ctx.stroke();
+  }
+  ctx.restore();
 
   ctx.strokeStyle = themeColors.line;
   ctx.lineWidth = 1;
+  ctx.globalAlpha = .9;
   for (let i = 0; i < n; i++) {
     const p = Math.round(margin + i * gap) + 0.5;
     ctx.beginPath(); ctx.moveTo(margin, p); ctx.lineTo(size - margin, p); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(p, margin); ctx.lineTo(p, size - margin); ctx.stroke();
   }
+  ctx.globalAlpha = 1;
 
   if (n >= 15) {
     const mid = (n - 1) / 2;
@@ -207,9 +258,10 @@ function render() {
     }
   }
 
+  drawWinLine(v, n, margin, gap);
+  drawLastDot(v.lastBlack, n, margin, gap, radius, 1);
+  drawLastDot(v.lastWhite, n, margin, gap, radius, -1);
   drawHover(v, n, margin, gap, radius);
-  drawRing(v.lastBlack, n, margin, gap, radius, '#4c8dff');
-  drawRing(v.lastWhite, n, margin, gap, radius, '#ff6b6b');
   drawAnim(n, margin, gap, radius);
 }
 
@@ -219,7 +271,9 @@ function drawCoords(n, margin, gap) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   for (let d = 0; d < n; d++) {
-    const [lr, lc] = fromDisplay(0, d, n);
+    // 列标签取第 0 行的第 d 列；行标签必须取第 d 行的第 0 列。
+    const [, lc] = fromDisplay(0, d, n);
+    const [lr] = fromDisplay(d, 0, n);
     const colLabel = String.fromCharCode(65 + lc);
     const colX = margin + d * gap;
     ctx.fillText(colLabel, colX, margin * 0.5);
@@ -233,25 +287,106 @@ function drawCoords(n, margin, gap) {
 
 function drawStone(x, y, radius, val, scale) {
   const rr = radius * (scale || 1);
+  const isBlack = val > 0;
+
+  ctx.save();
+  ctx.globalAlpha = (scale && scale < 1) ? 0.35 + 0.65 * scale : 1;
+  ctx.shadowColor = isBlack ? 'rgba(0,0,0,.55)' : 'rgba(70,50,25,.40)';
+  ctx.shadowBlur = rr * 0.55;
+  ctx.shadowOffsetY = rr * 0.20;
+
+  const g = ctx.createRadialGradient(
+    x - rr * 0.34, y - rr * 0.38, rr * 0.12,
+    x, y, rr * 1.08
+  );
+  if (isBlack) {
+    g.addColorStop(0, '#5f646d');
+    g.addColorStop(.42, '#262a30');
+    g.addColorStop(1, '#08090b');
+  } else {
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(.52, '#f6f1e6');
+    g.addColorStop(1, '#cfc4b0');
+  }
   ctx.beginPath();
   ctx.arc(x, y, rr, 0, Math.PI * 2);
-  ctx.fillStyle = val > 0 ? '#111318' : '#fafafa';
-  ctx.globalAlpha = (scale && scale < 1) ? 0.35 + 0.65 * scale : 1;
+  ctx.fillStyle = g;
   ctx.fill();
-  ctx.globalAlpha = 1;
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = val > 0 ? '#000' : '#b9b9b9';
+
+  // 去掉投影再画一圈极细轮廓，避免边缘糊在木纹里
+  ctx.shadowColor = 'transparent';
+  ctx.lineWidth = Math.max(0.6, rr * 0.05);
+  ctx.strokeStyle = isBlack ? 'rgba(255,255,255,.14)' : 'rgba(120,95,60,.28)';
   ctx.stroke();
+  ctx.restore();
 }
 
-function drawRing(pos, n, margin, gap, radius, color) {
+// 从最后一手反推五连的两端。只用于"画一条纪念线"，不参与胜负判定
+// （胜负由后端 MatchState 决定，前端不重算规则）。
+function findWinLine(v, n) {
+  const color = v.status === 'BlackWin' ? 1 : v.status === 'WhiteWin' ? -1 : 0;
+  if (!color) return null;
+  const last = color > 0 ? v.lastBlack : v.lastWhite;
+  if (!posValid(last)) return null;
+  const cells = v.cells || [];
+  const win = v.winLength || 5;
+  const at = (r, c) => (r >= 0 && r < n && c >= 0 && c < n) ? cells[r * n + c] : 0;
+  if (at(last[0], last[1]) !== color) return null;
+
+  const dirs = [[0, 1], [1, 0], [1, 1], [1, -1]];
+  for (const [dr, dc] of dirs) {
+    let a = last.slice(), b = last.slice();
+    while (at(a[0] - dr, a[1] - dc) === color) { a = [a[0] - dr, a[1] - dc]; }
+    while (at(b[0] + dr, b[1] + dc) === color) { b = [b[0] + dr, b[1] + dc]; }
+    const len = Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]) + 1;
+    if (len >= win) return [a, b];
+  }
+  return null;
+}
+
+function drawWinLine(v, n, margin, gap) {
+  const line = findWinLine(v, n);
+  if (!line) return;
+  const [a, b] = line;
+  const [ar, ac] = toDisplay(a[0], a[1], n);
+  const [br, bc] = toDisplay(b[0], b[1], n);
+  const x1 = margin + ac * gap, y1 = margin + ar * gap;
+  const x2 = margin + bc * gap, y2 = margin + br * gap;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(3, gap * 0.11);
+  ctx.strokeStyle = themeColors.brass || '#b07a2c';
+  ctx.shadowColor = themeColors.brass || '#b07a2c';
+  ctx.shadowBlur = gap * 0.7;
+  ctx.globalAlpha = .9;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  // 两端各点一个小圆，像棋子被串起来
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = themeColors.brass || '#b07a2c';
+  for (const [x, y] of [[x1, y1], [x2, y2]]) {
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(2.5, gap * 0.09), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// 最后一手：在棋子上点一个反差色小点，比画圈干净
+function drawLastDot(pos, n, margin, gap, radius, val) {
   if (!posValid(pos)) return;
   const [dr, dc] = toDisplay(pos[0], pos[1], n);
+  ctx.save();
   ctx.beginPath();
-  ctx.arc(margin + dc * gap, margin + dr * gap, radius * 0.72, 0, Math.PI * 2);
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = color;
-  ctx.stroke();
+  ctx.arc(margin + dc * gap, margin + dr * gap,
+          Math.max(1.8, radius * 0.17), 0, Math.PI * 2);
+  ctx.fillStyle = val > 0 ? 'rgba(255,255,255,.72)' : 'rgba(28,20,10,.55)';
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawHover(v, n, margin, gap, radius) {
@@ -308,19 +443,47 @@ function applyState(st) {
   updateControls(st);
 }
 
+const STATUS_TEXT = {
+  Idle: 'Ready', InProgress: 'In progress', BlackWin: 'Black wins',
+  WhiteWin: 'White wins', Draw: 'Draw', Replay: 'Replay',
+};
+
 function updateMeta(v) {
   if (!v) return;
   const p = v.players || { black: '-', white: '-' };
-  el.status.textContent = v.status;
-  el.turn.textContent = (v.status === 'InProgress' || v.status === 'Replay')
-    ? (v.turn > 0 ? 'Black' : 'White') : '-';
+  const inPlay = v.status === 'InProgress';
+  const over = !inPlay && v.status !== 'Idle' && v.status !== 'Replay';
+
+  el.status.textContent = STATUS_TEXT[v.status] || v.status || 'Ready';
+  el.status.className = 'status-pill' + (inPlay ? ' is-live' : (over ? ' is-over' : ''));
+
+  const thinking = !!v.thinking;
+  let turnText = '-';
+  if (inPlay) {
+    if (thinking) turnText = 'Computer thinking';
+    else if (v.humanTurn) turnText = 'Your move';
+    else turnText = (v.turn > 0 ? 'Black' : 'White') + ' to move';
+  } else if (v.status === 'Replay') {
+    turnText = 'Replay';
+  } else if (over) {
+    turnText = STATUS_TEXT[v.status];
+  }
+  el.turn.textContent = turnText;
+  el.turnBox.classList.toggle('is-idle', !inPlay);
+  el.turnBox.classList.toggle('is-thinking', thinking);
+  el.thinking.classList.toggle('hidden', !thinking);
+
   el.moves.textContent = v.moveCount;
   el.size.textContent = v.boardSize + ' x ' + v.boardSize;
-  el.connect.textContent = (v.winLength || 5) + ' in a row';
+  el.connect.textContent = (v.winLength || 5);
   el.black.textContent = label(p.black);
   el.white.textContent = label(p.white);
-  el.message.textContent = v.thinking ? 'AI thinking...'
-    : (v.message || (mode === 'replay' ? 'Replaying' : ''));
+
+  el.cardBlack.classList.toggle('is-turn', inPlay && v.turn > 0);
+  el.cardWhite.classList.toggle('is-turn', inPlay && v.turn < 0);
+
+  el.message.textContent = thinking ? 'AI thinking, please wait...'
+    : (v.message || (mode === 'replay' ? 'Replaying a saved game' : ''));
 }
 
 function updateControls(v) {
@@ -350,8 +513,8 @@ function updateOverlay(st) {
 }
 
 function setConn(ok) {
-  el.conn.textContent = ok ? 'live' : 'reconnecting';
-  el.conn.className = 'badge ' + (ok ? 'badge--on' : 'badge--off');
+  el.conn.className = 'conn ' + (ok ? 'conn--on' : 'conn--off');
+  el.connText.textContent = ok ? 'live' : 'reconnecting';
 }
 
 /* ---------- SSE ---------- */
@@ -427,7 +590,29 @@ canvas.addEventListener('click', (ev) => {
 });
 
 /* ---------- 对话框 ---------- */
-function openNewGame() { el.modalNew.classList.remove('hidden'); }
+function syncPresets() {
+  const size = parseInt(el.inSize.value, 10);
+  const win = parseInt(el.inWin.value, 10);
+  document.querySelectorAll('.preset').forEach(btn => {
+    const hit = Number(btn.dataset.size) === size && Number(btn.dataset.win) === win;
+    btn.classList.toggle('preset--on', hit);
+  });
+}
+
+function openNewGame() {
+  // 预填当前设置，换局时不用重选一遍
+  if (state && state.boardSize) {
+    el.inSize.value = state.boardSize;
+    el.inWin.value = state.winLength || 5;
+  }
+  if (state && state.players) {
+    if (state.players.black && state.players.black.id) el.selP1.value = state.players.black.id;
+    if (state.players.white && state.players.white.id) el.selP2.value = state.players.white.id;
+  }
+  syncPresets();
+  el.modalNew.classList.remove('hidden');
+  setTimeout(() => { try { el.inSize.focus(); el.inSize.select(); } catch (_) {} }, 30);
+}
 function closeNewGame() { el.modalNew.classList.add('hidden'); }
 function openList(title, html) {
   el.listTitle.textContent = title;
@@ -435,6 +620,26 @@ function openList(title, html) {
   el.modalList.classList.remove('hidden');
 }
 function closeList() { el.modalList.classList.add('hidden'); }
+
+// 真正下发"开新局"。校验与后端一致，但前端先拦一遍，避免点了没反应。
+async function startGameWith(boardSize, winLength, black, white, storageEnabled) {
+  if (!Number.isInteger(boardSize) || boardSize < 4 || boardSize > 30) {
+    showNewError('Board size must be between 4 and 30.'); return false;
+  }
+  if (!Number.isInteger(winLength) || winLength < 4 || winLength > 15) {
+    showNewError('Win length must be between 4 and 15.'); return false;
+  }
+  if (winLength > boardSize) {
+    showNewError('Win length cannot exceed board size.'); return false;
+  }
+  showNewError('');
+  closeNewGame();
+  el.overlay.classList.add('hidden');
+  exitReplayIfNeeded();
+  prevState = null;
+  await cmd('new', { boardSize, winLength, black, white, storageEnabled });
+  return true;
+}
 
 /* ---------- 玩家目录（下拉框完全由后端目录驱动） ---------- */
 function playerOptions(selectedId) {
@@ -572,7 +777,15 @@ function exitReplayIfNeeded() { if (mode === 'replay') exitReplay(); }
 
 /* ---------- 按钮 ---------- */
 document.getElementById('btn-new').addEventListener('click', openNewGame);
-document.getElementById('btn-again').addEventListener('click', () => { el.overlay.classList.add('hidden'); openNewGame(); });
+// 再来一局：直接沿用当前设置开，不再让用户过一遍对话框
+document.getElementById('btn-again').addEventListener('click', () => {
+  el.overlay.classList.add('hidden');
+  const size = (state && state.boardSize) || parseInt(el.inSize.value, 10) || 15;
+  const win = (state && state.winLength) || parseInt(el.inWin.value, 10) || 5;
+  const black = state && state.players && state.players.black ? state.players.black.id : 'human';
+  const white = state && state.players && state.players.white ? state.players.white.id : 'minimax';
+  startGameWith(size, win, black, white, true);
+});
 document.getElementById('btn-close').addEventListener('click', () => el.overlay.classList.add('hidden'));
 document.getElementById('btn-cancel').addEventListener('click', closeNewGame);
 document.getElementById('btn-list-close').addEventListener('click', closeList);
@@ -583,28 +796,25 @@ document.getElementById('btn-flip').addEventListener('click', () => {
   render();
 });
 
-document.getElementById('btn-start').addEventListener('click', async () => {
-  const boardSize = parseInt(el.inSize.value, 10);
-  const winLength = parseInt(el.inWin.value, 10);
-  const black = el.selP1.value || 'human';
-  const white = el.selP2.value || 'human';
-  const storageEnabled = el.inStorage.checked;
+// 预设：一格点下去就填好尺寸，点 Start 即开局
+document.querySelectorAll('.preset').forEach(btn => {
+  btn.addEventListener('click', () => {
+    el.inSize.value = btn.dataset.size;
+    el.inWin.value = btn.dataset.win;
+    syncPresets();
+  });
+});
+el.inSize.addEventListener('input', syncPresets);
+el.inWin.addEventListener('input', syncPresets);
 
-  if (!Number.isInteger(boardSize) || boardSize < 4 || boardSize > 30) {
-    showNewError('Board size must be between 4 and 30.'); return;
-  }
-  if (!Number.isInteger(winLength) || winLength < 4 || winLength > 15) {
-    showNewError('Win length must be between 4 and 15.'); return;
-  }
-  if (winLength > boardSize) {
-    showNewError('Win length cannot exceed board size.'); return;
-  }
-  showNewError('');
-  closeNewGame();
-  el.overlay.classList.add('hidden');
-  exitReplayIfNeeded();
-  prevState = null;
-  await cmd('new', { boardSize, winLength, black, white, storageEnabled });
+document.getElementById('btn-start').addEventListener('click', () => {
+  startGameWith(
+    parseInt(el.inSize.value, 10),
+    parseInt(el.inWin.value, 10),
+    el.selP1.value || 'human',
+    el.selP2.value || 'human',
+    el.inStorage.checked
+  );
 });
 
 document.getElementById('btn-undo').addEventListener('click', () => cmd('undo', { steps: 1 }));
@@ -732,6 +942,7 @@ async function init() {
   fillPlayers();
   syncSwapSelects();
   updateNewNote();
+  syncPresets();
   subscribe();
 }
 
