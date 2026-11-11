@@ -163,23 +163,23 @@ std::vector<EngineBinding> builtinEngineBindings() {
     std::vector<EngineBinding> v;
 
     v.push_back(EngineBinding{
-        "easy-judge", "EasyJudge", "最弱：只做威胁判定 + 随机",
+        "easy-judge", "EasyJudge", "Weakest: threat checks + random",
         [] { return makeEasy(); }, {} });
 
     v.push_back(EngineBinding{
-        "puregreed-1.0", "PureGreed 1.0", "常规评分纯防守（只堵不建）",
+        "puregreed-1.0", "PureGreed 1.0", "Heuristic scoring, defense only",
         [] { return makePureGreed(0.0, "PureGreed 1.0"); }, {} });
 
     v.push_back(EngineBinding{
-        "puregreed-1.1", "PureGreed 1.1", "常规评分攻防同权",
+        "puregreed-1.1", "PureGreed 1.1", "Heuristic scoring, balanced attack and defense",
         [] { return makePureGreed(1.0, "PureGreed 1.1"); }, {} });
 
     v.push_back(EngineBinding{
-        "minimax", "Minimax++", "α-β 搜索 + 置换表",
+        "minimax", "Minimax++", "Alpha-beta search + transposition table",
         [] { return makeMinimax(); }, setSearchBudget });
 
     v.push_back(EngineBinding{
-        "tactical-max", "TacticalMax", "最强：增量评估 + PVS + VCF/VCT",
+        "tactical-max", "TacticalMax", "Strongest: incremental eval + PVS + VCF/VCT",
         [] { return makeTactical(); }, setSearchBudget });
 
     return v;

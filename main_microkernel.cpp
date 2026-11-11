@@ -96,13 +96,13 @@ int runMain(int argc, char** argv) {
     //   看起来跟崩溃一模一样。所以至少要说清"我在跑、怎么退出"。
     if (webHost) {
         std::fprintf(stderr,
-                     "\n  五子棋已启动，浏览器会自动打开棋盘；关闭这个控制台窗口即可退出。\n"
-                     "  如果浏览器没弹出，把上面的网址复制到浏览器即可。\n\n");
+                     "\n  Gomoku is running. The browser will open the board; close this console window to quit.\n"
+                     "  If the browser did not open, copy the URL above into it.\n\n");
         std::fflush(stderr);
     } else if (!opts.selfTest && !opts.selfplay) {
         std::fprintf(stderr,
-                     "\n  五子棋  %s  黑:%s 白:%s  棋盘:%dx%d 连%d子\n"
-                     "  关闭这个控制台窗口即可退出。\n\n",
+                     "\n  Gomoku  view:%s  black:%s  white:%s  board:%dx%d  connect:%d\n"
+                     "  Close this console window to quit.\n\n",
                      opts.view.c_str(),
                      opts.black.c_str(),
                      opts.white.c_str(),
@@ -122,8 +122,8 @@ int runMain(int argc, char** argv) {
     // 就让他看到错误，而不是悄悄换成另一个界面。
     if (webHost && code != 0 && !opts.viewExplicit) {
         std::fprintf(stderr,
-                     "\n  网页界面启动失败（退出码 %d），已自动切换到终端界面。\n"
-                     "  若要继续用网页：确认 webapp/ 与 Gomoku.exe 同级，或用 --port 8099 换端口。\n\n",
+                     "\n  Web UI failed to start (exit %d); falling back to the terminal UI.\n"
+                     "  To keep using the web UI: put webapp/ next to Gomoku.exe, or try --port 8099.\n\n",
                      code);
         std::fflush(stderr);
         opts.view = "cli";
@@ -132,8 +132,7 @@ int runMain(int argc, char** argv) {
         code = host->run();
     } else if (webHost && code != 0) {
         std::fprintf(stderr,
-                     "\n启动失败（退出码 %d）。请确认 webapp 目录与 Gomoku.exe "
-                     "在同一目录下。\n",
+                     "\nStartup failed (exit %d). Make sure the webapp folder is next to Gomoku.exe.\n",
                      code);
         std::fflush(stderr);
     }

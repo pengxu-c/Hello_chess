@@ -52,8 +52,8 @@ int CliHost::run() {
     //   现在：首选界面不可用 → 退回终端界面继续玩 → 只有终端也起不来才失败。
     if (!view && opts_.view != "cli") {
         std::fprintf(stderr,
-                     "[view] '%s' 不可用，已回退到终端界面（cli）。\n"
-                     "[view] 用 --view <id> 指定其它界面，--views 查看全部可用界面。\n",
+                     "[view] '%s' is unavailable; falling back to the terminal UI (cli).\n"
+                     "[view] Use --view <id> to pick another view, or --views to list them.\n",
                      opts_.view.c_str());
         std::fflush(stderr);
         view = createView("cli", vctx);

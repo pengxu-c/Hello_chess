@@ -96,7 +96,7 @@ private:
 
 EngineBinding apiEngineBinding() {
     return EngineBinding{
-        "api-ai", "API AI", "远程大模型（需 config.json）",
+        "api-ai", "API AI", "Remote LLM player (needs config.json)",
         []() -> std::shared_ptr<IEngineHandle> {
             AIConfig cfg;
             // 【为什么要逐个候选路径试】
@@ -130,18 +130,18 @@ EngineBinding apiEngineBinding() {
 // ============================================================
 void registerBuiltinPlayers(PlayerRegistry& reg) {
     // ---- 1. 人类（落子来自界面输入） ----
-    reg.add(PlayerInfo{ "human", "Human", "由界面点击落子", true, true, "" },
+    reg.add(PlayerInfo{ "human", "Human", "Human; moves come from the UI", true, true, "" },
             [](const PlayerContext&) -> PlayerPtr {
                 return std::make_unique<HumanPlayerStub>();
             });
 
     // ---- 2. 原生示例玩家：证明"不需要框架也能写插件" ----
-    reg.add(PlayerInfo{ "random", "Random", "均匀随机（最弱陪练）", false, true, "" },
+    reg.add(PlayerInfo{ "random", "Random", "Uniform random (weakest)", false, true, "" },
             [](const PlayerContext&) -> PlayerPtr {
                 return std::make_unique<RandomPlayer>();
             });
 
-    reg.add(PlayerInfo{ "greedy", "Greedy", "一步贪心：延己线 + 堵对方", false, true, "" },
+    reg.add(PlayerInfo{ "greedy", "Greedy", "One-ply greedy: extend own line, block opponent", false, true, "" },
             [](const PlayerContext&) -> PlayerPtr {
                 return std::make_unique<GreedyPlayer>();
             });

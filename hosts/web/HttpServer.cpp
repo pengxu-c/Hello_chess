@@ -204,8 +204,8 @@ bool HttpServer::start() {
         if (probeSock == INVALID_SOCKET) {
             const int probeErr = WSAGetLastError();
             std::fprintf(stderr, "[http] probe socket() failed, wsa=%d\n", probeErr);
-            std::fprintf(stderr, "[http]   hint: 10106 = WSAEPROVIDERFAILEDINIT，"
-                                 "不是端口问题；检查安全软件/网络过滤驱动是否拦了本进程\n");
+            std::fprintf(stderr, "[http]   hint: 10106 = WSAEPROVIDERFAILEDINIT (not a port issue); "
+                                 "check whether security software or a network filter driver blocks this process\n");
             std::fflush(stderr);
         } else {
             ::closesocket(probeSock);

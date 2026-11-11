@@ -27,14 +27,14 @@ namespace gomoku {
 void registerBuiltinViews(ViewRegistry& reg) {
     // ---- 终端界面：最轻、无依赖，也是 CI/无头场景的默认选择 ----
     reg.add(ViewInfo{ "cli", "CLI (terminal)",
-                      "控制台文本棋盘，键盘输入坐标落子" },
+                      "Text board in the console; type coordinates to move" },
             [](const ViewContext& ctx) -> std::unique_ptr<IView> {
                 return std::make_unique<CliView>(ctx.headless);
             });
 
     // ---- 浏览器界面：内核状态以 SSE 推送到网页 ----
     reg.add(ViewInfo{ "web", "Web (browser)",
-                      "本地 HTTP 服务 + 浏览器图形界面" },
+                      "Local HTTP server + browser UI" },
             [](const ViewContext& ctx) -> std::unique_ptr<IView> {
                 auto view = std::make_unique<WebView>(ctx.webRoot, ctx.port,
                                                       ctx.openBrowser, ctx.headless);
@@ -54,7 +54,7 @@ void registerBuiltinViews(ViewRegistry& reg) {
     // 其余界面与内核不受影响（宏由 CMake 在找到 easyx.h 时定义）。
 #ifdef GOMOKU_HAS_EASYX
     reg.add(ViewInfo{ "easyx", "EasyX (window)",
-                      "原生图形窗口，鼠标点击落子（无需浏览器）" },
+                      "Native window; click to move (no browser)" },
             [](const ViewContext& ctx) -> std::unique_ptr<IView> {
                 auto view = std::make_unique<EasyXView>(ctx.headless);
                 if (!view->open()) return nullptr;

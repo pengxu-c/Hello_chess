@@ -117,10 +117,10 @@ foreach(dir IN LISTS EASYX_INCLUDE_DIR)
     endif()
 endforeach()
 if(EASYX_FOUND)
-    message(STATUS "已找到 EasyX 头文件: ${EASYX_FOUND}")
+    message(STATUS "EasyX headers found: ${EASYX_FOUND}")
 else()
-    message(STATUS "未找到 easyx.h —— 界面插件 easyx 将无法编译，"
-                   "其余功能不受影响（可设置 EASYX_LOCAL_PATH 环境变量指定路径）")
+    message(STATUS "easyx.h not found: the easyx view plugin will not be built; "
+                   "everything else still works (set EASYX_LOCAL_PATH to point at it)")
 endif()
 
 add_executable(hello_chess ${GOMOKU_CORE_SOURCES})
