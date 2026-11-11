@@ -65,11 +65,25 @@ let themeColors = {};
 let toastTimer = null;
 let lastMessage = '';      // 避免同一条内核消息反复弹
 
+// SSE 连接生命周期：模块级持有，便于 quit/pagehide 时主动关闭，
+// 避免浏览器自动重连占满服务端 SSE 名额。
+let es = null;             // 当前 EventSource
+let sseRetry = 0;          // 连续重连次数（指数退避）
+let sseRetryTimer = null;  // 退避计时器
+let sseClosed = false;     // 主动关闭后不再自动重连
+const SSE_MAX_RETRY = 6;   // 最大重连次数，超限停止并提示
+
 /* ---------- 通信 ---------- */
 
 // 发一条命令给内核。所有对棋局的操作都走这里（唯一写入口）。
+const inflightCmds = new Map();
 async function cmd(op, payload) {
-  return api('/api/cmd', Object.assign({ op }, payload || {}));
+  const key = op + ':' + JSON.stringify(payload || {});
+  // 同一条命令在途时直接复用，避免连点/双击发出两手 move 或两次 undo。
+  if (inflightCmds.has(key)) return inflightCmds.get(key);
+  const task = api('/api/cmd', Object.assign({ op }, payload || {}));
+  inflightCmds.set(key, task);
+  try { return await task; } finally { inflightCmds.delete(key); }
 }
 
 async function api(path, body) {
@@ -107,6 +121,9 @@ function esc(s) {
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
   ));
 }
+
+// 玩家座位既可能是实时快照里的 {id,name} 对象，也可能是回放里的字符串。
+const label = (v) => (typeof v === 'string' ? v : (v && v.name) || '-');
 
 /* ---------- 主题 ---------- */
 function readThemeColors() {
@@ -300,8 +317,8 @@ function updateMeta(v) {
   el.moves.textContent = v.moveCount;
   el.size.textContent = v.boardSize + ' x ' + v.boardSize;
   el.connect.textContent = (v.winLength || 5) + ' in a row';
-  el.black.textContent = p.black || '-';
-  el.white.textContent = p.white || '-';
+  el.black.textContent = label(p.black);
+  el.white.textContent = label(p.white);
   el.message.textContent = v.thinking ? 'AI thinking...'
     : (v.message || (mode === 'replay' ? 'Replaying' : ''));
 }
@@ -325,7 +342,7 @@ function updateOverlay(st) {
   if (map[st.status]) {
     el.overlayTitle.textContent = map[st.status];
     const p = st.players || { black: '-', white: '-' };
-    el.overlayText.textContent = `${p.black} vs ${p.white} - ${st.moveCount} moves`;
+    el.overlayText.textContent = `${label(p.black)} vs ${label(p.white)} - ${st.moveCount} moves`;
     el.overlay.classList.remove('hidden');
   } else {
     el.overlay.classList.add('hidden');
@@ -338,9 +355,19 @@ function setConn(ok) {
 }
 
 /* ---------- SSE ---------- */
+// 主动关闭：清退避计时器并 close()，阻止浏览器自动重连占满服务端 SSE 名额。
+function closeEvents() {
+  sseClosed = true;
+  if (sseRetryTimer) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
+  if (es) { es.close(); es = null; }
+}
+
 function subscribe() {
-  const es = new EventSource('/api/events');
-  es.onopen = () => setConn(true);
+  if (sseClosed) return;
+  if (sseRetryTimer) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
+  if (es) es.close();
+  es = new EventSource('/api/events');
+  es.onopen = () => { sseRetry = 0; setConn(true); };
   es.onmessage = (ev) => {
     try {
       const st = JSON.parse(ev.data);
@@ -348,7 +375,18 @@ function subscribe() {
       else { prevState = state; state = st; }
     } catch (e) { console.warn(e); }
   };
-  es.onerror = () => setConn(false);
+  es.onerror = () => {
+    setConn(false);
+    if (sseClosed) return;                 // 已主动关闭，不再重连
+    if (es) { es.close(); es = null; }     // 接管重连节奏，不让浏览器立即自动重连
+    if (sseRetry >= SSE_MAX_RETRY) {
+      toast('Connection lost. Reload the page to reconnect.', 'error');
+      return;
+    }
+    const delay = Math.min(1000 * Math.pow(2, sseRetry), 30000);
+    ++sseRetry;
+    sseRetryTimer = setTimeout(() => { sseRetryTimer = null; subscribe(); }, delay);
+  };
 }
 
 /* ---------- 鼠标 ---------- */
@@ -484,11 +522,13 @@ async function startReplay(id) {
   updateControls(replayView);
 }
 
+let replaySeq = 0;
 async function setReplayStep(step) {
   if (!replay) return;
   const s = clamp(step, 0, replay.total);
+  const seq = ++replaySeq;   // 滑块连拖/自动播放时，只认最后一次请求的响应
   const r = await api('/api/replay', { id: replay.id, step: s });
-  if (!r || !r.ok) return;
+  if (!r || !r.ok || seq !== replaySeq) return;
   replay.step = r.step;
   replayView = buildReplayView(r);
   el.rpSlider.value = String(r.step);
@@ -638,6 +678,7 @@ document.getElementById('btn-stats').addEventListener('click', async () => {
 
 document.getElementById('btn-quit').addEventListener('click', async () => {
   await cmd('quit');
+  closeEvents();
   document.body.innerHTML =
     '<div style="padding:48px;text-align:center;font:16px system-ui;color:#8a8f98">' +
     'Server stopped. You can close this tab.</div>';
@@ -656,11 +697,17 @@ el.rpSlider.addEventListener('input', () => { stopPlay(); setReplayStep(parseInt
 document.addEventListener('keydown', (ev) => {
   const tag = (ev.target && ev.target.tagName) || '';
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  // 别抢系统/浏览器快捷键：Ctrl+R 应该刷新页面，不是打开回放。
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
 
   if (ev.key === 'Escape') {
     closeNewGame(); closeList(); el.overlay.classList.add('hidden');
     return;
   }
+  const modalOpen = !el.modalNew.classList.contains('hidden') ||
+                    !el.modalList.classList.contains('hidden');
+  if (modalOpen) return;
+
   if (mode === 'replay') {
     if (ev.key === 'ArrowLeft') { stopPlay(); if (replay) setReplayStep(replay.step - 1); }
     if (ev.key === 'ArrowRight') { stopPlay(); if (replay) setReplayStep(replay.step + 1); }
@@ -690,3 +737,4 @@ async function init() {
 
 init();
 window.addEventListener('resize', () => render());
+window.addEventListener('pagehide', closeEvents);

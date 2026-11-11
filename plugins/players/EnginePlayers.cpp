@@ -43,6 +43,10 @@ public:
 
     Coord decide(int boardSize, int winLength, const std::vector<Move>& history,
                  Stone color) override {
+        // L2 纵深防御：入口夹取，阻断绕过归一化直达 Board 的非法尺寸
+        if (boardSize < 4 || boardSize > 30) boardSize = 15;
+        if (winLength < 4 || winLength > 15) winLength = 5;
+        if (winLength > boardSize) winLength = boardSize;
         // 1) 按需重建旧棋盘（尺寸或步数变化时）
         if (board_.size() != boardSize) {
             board_.resize(boardSize);
@@ -101,12 +105,14 @@ std::shared_ptr<IEngineHandle> makeTactical() {
                                           std::make_unique<TacticalMax>(judge));
 }
 
-// TacticalMax 支持时间预算；其它引擎忽略之（std::function 为空即不调用）
-void setTacticalBudget(IEngineHandle* h, int ms) {
+// 两个搜索型引擎都支持时间预算；极快的贪心/随机档不需要（空回调即跳过）。
+void setSearchBudget(IEngineHandle* h, int ms) {
     auto* eh = dynamic_cast<EngineHandle*>(h);
     if (!eh) return;
     if (auto* tm = dynamic_cast<TacticalMax*>(eh->raw()))
         tm->setTimeBudgetMs(ms);
+    else if (auto* mm = dynamic_cast<MinimaxPP*>(eh->raw()))
+        mm->setTimeBudgetMs(ms);
 }
 
 }  // namespace
@@ -170,11 +176,11 @@ std::vector<EngineBinding> builtinEngineBindings() {
 
     v.push_back(EngineBinding{
         "minimax", "Minimax++", "α-β 搜索 + 置换表",
-        [] { return makeMinimax(); }, {} });
+        [] { return makeMinimax(); }, setSearchBudget });
 
     v.push_back(EngineBinding{
         "tactical-max", "TacticalMax", "最强：增量评估 + PVS + VCF/VCT",
-        [] { return makeTactical(); }, setTacticalBudget });
+        [] { return makeTactical(); }, setSearchBudget });
 
     return v;
 }

@@ -56,7 +56,6 @@ public:
 
     std::string id() const override { return binding_.id; }
     std::string displayName() const override { return binding_.display; }
-    bool async() const override { return true; }   // 重引擎一律放后台线程
     bool available() const override { return engine_ != nullptr; }
 
     void onMatchStart(const ViewState& state) override;

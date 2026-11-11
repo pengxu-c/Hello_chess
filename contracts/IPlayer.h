@@ -6,8 +6,9 @@
 // 不需要改内核、不需要改界面、不需要改宿主、不需要改 CMake。
 //
 // 设计要点（与旧代码的关键区别）：
-//   1. decide() 是「同步思考」，由内核在后台工作线程中调用 —— 因此远程 API、
-//      深度学习推理这类耗时玩家不会卡住界面；旧代码把人类输入和 AI 思考混在
+//   1. tick() 由内核控制线程同步调用。调用前内核会释放状态锁并推送
+//      "正在思考"帧，但思考期间不处理新命令——所以插件必须尊重
+//      ThinkBudget，别把一步棋算到几秒。旧代码把人类输入和 AI 思考混在
 //      同一个 place() 轮询里，是界面与玩家耦合的根源。
 //   2. 人类玩家不再需要轮询界面：直接实现 human()=true，内核会把落子权利
 //      交给界面，通过 IControllable::play() 送达（见 contracts/IControllable.h）。
@@ -51,11 +52,6 @@ public:
     // 是否人类。返回 true 时内核不会调用 tick()，而是把落子权交给界面：
     // 界面通过 IControllable::play(r,c) 把坐标送进内核。
     virtual bool human() const { return false; }
-
-    // 是否已在后台线程思考。
-    //   true（默认）→ 内核在工作线程调用 tick()，界面保持流畅；
-    //   false       → 内核在本线程调用 tick()（纯本地且极快时用）。
-    virtual bool async() const { return true; }
 
     // 插件是否「已正确配置、可以工作」。
     // 默认 true；需要外部资源（API Key、模型文件、GPU）的玩家请覆盖它。

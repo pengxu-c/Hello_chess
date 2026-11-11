@@ -46,32 +46,10 @@ int runMain(int argc, char** argv) {
         return 0;
     }
 
-    // ---- 开局前问一句"谁执黑先手"（本地交互模式）----
-    //
-    // 【为什么要问】双击 exe 直接开打时，用户没法用命令行参数指定先后手，
-    //   于是只能固定在 human 执黑。这里给一次选择机会，回车即用默认。
-    //
-    // 【哪些模式不问】
-    //   * --selfplay / --selftest  无人值守，问了没人答
-    //   * --headless               同上（CI / 脚本）
-    //   * web                      网页界面自己有选玩家的控件，不劳控制台
-    const bool interactive = !opts.selfTest && !opts.selfplay && !opts.headless;
-    if (interactive && opts.view != "web") {
-        std::fprintf(stderr,
-                     "Who plays Black (moves first)?\n"
-                     "  1) You       (human)        [default]\n"
-                     "  2) Computer  (%s)\n"
-                     "Enter 1 or 2, or just press Enter for default: ",
-                     opts.black == "human" ? opts.white.c_str() : opts.black.c_str());
-        std::fflush(stderr);
-
-        char buf[64] = { 0 };
-        if (std::fgets(buf, sizeof(buf), stdin) != nullptr && buf[0] == '2') {
-            // 交换先后手：把 human 换到白方
-            std::swap(opts.black, opts.white);
-        }
-        std::fprintf(stderr, "\n");
-    }
+    // ---- 不再在控制台询问"谁先手" ----
+    // 双击启动要的是"打开就能玩"，多一句提问就多一次卡顿。
+    // 想换先后手：网页里用选人下拉框，命令行用 --black / --white。
+    // 默认 human 执黑先手，无需任何输入。
 
     // ---- 选宿主：这一张表就是"运行方式"的注册表 ----
     std::unique_ptr<gomoku::IAppHost> host;
@@ -118,24 +96,13 @@ int runMain(int argc, char** argv) {
     //   看起来跟崩溃一模一样。所以至少要说清"我在跑、怎么退出"。
     if (webHost) {
         std::fprintf(stderr,
-                     "\n提示：关闭这个控制台窗口即可退出程序。\n"
-                     "若浏览器没有自动打开，请把上面显示的地址复制到浏览器。\n");
+                     "\n  五子棋已启动，浏览器会自动打开棋盘；关闭这个控制台窗口即可退出。\n"
+                     "  如果浏览器没弹出，把上面的网址复制到浏览器即可。\n\n");
         std::fflush(stderr);
     } else if (!opts.selfTest && !opts.selfplay) {
         std::fprintf(stderr,
-                     "\n========================================\n"
-                     "  Hello Chess  (%s)\n"
-                     "========================================\n"
-                     "  Black: %-14s  White: %s\n"
-                     "  Board: %d x %d          Win: %d in a row\n"
-                     "\n"
-                     "  The game window is open now.\n"
-                     "  Close this console window (or the game window) to quit.\n"
-                     "\n"
-                     "  Other frontends:\n"
-                     "    hello_chess.exe --view cli     terminal UI\n"
-                     "    hello_chess.exe --view web     browser UI\n"
-                     "========================================\n\n",
+                     "\n  五子棋  %s  黑:%s 白:%s  棋盘:%dx%d 连%d子\n"
+                     "  关闭这个控制台窗口即可退出。\n\n",
                      opts.view.c_str(),
                      opts.black.c_str(),
                      opts.white.c_str(),
@@ -145,12 +112,27 @@ int runMain(int argc, char** argv) {
         std::fflush(stderr);
     }
 
-    const int code = host->run();
+    int code = host->run();
 
 #ifdef _WIN32
-    if (webHost && code != 0) {
+    // ---- 网页界面没起来时自动降级到终端 ----
+    // webapp 缺失、端口被占、防火墙拦了本地监听，都不该让双击的用户
+    // 只看到一个报错黑框。终端界面零依赖，一定能跑，所以作为最后兜底。
+    // 只对"没显式指定界面"的情况降级：如果用户明确写了 --view web，
+    // 就让他看到错误，而不是悄悄换成另一个界面。
+    if (webHost && code != 0 && !opts.viewExplicit) {
         std::fprintf(stderr,
-                     "\n启动失败（退出码 %d）。请确认 webapp 目录与 hello_chess.exe "
+                     "\n  网页界面启动失败（退出码 %d），已自动切换到终端界面。\n"
+                     "  若要继续用网页：确认 webapp/ 与 Gomoku.exe 同级，或用 --port 8099 换端口。\n\n",
+                     code);
+        std::fflush(stderr);
+        opts.view = "cli";
+        opts.openBrowser = false;
+        host = std::make_unique<gomoku::CliHost>(opts);
+        code = host->run();
+    } else if (webHost && code != 0) {
+        std::fprintf(stderr,
+                     "\n启动失败（退出码 %d）。请确认 webapp 目录与 Gomoku.exe "
                      "在同一目录下。\n",
                      code);
         std::fflush(stderr);

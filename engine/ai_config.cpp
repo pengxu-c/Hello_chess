@@ -11,23 +11,33 @@
 // 缺省字段采用空值/保守默认值；apiUrl/model/apiKey 任一为空即视为未启用。
 //
 // 说明：本函数会被"玩家目录探测"多次调用（界面每次拉目录都要知道 API 玩家
-// 是否可用）。因此按路径缓存一次结果：同名文件只打印一次日志，
-// 避免每次打开网页都刷屏。文件内容在进程内视为不变（配置只在启动时读取）。
+// 是否可用）。因此按路径缓存结果：同一路径只读一次、只报一次日志。
+// 注意缓存是按"路径"而不是按"文件名"做的 —— 调用方会依次试多个候选路径，
+// 每个候选各报一条 not found 是预期行为，不是刷屏。
+// 文件内容在进程内视为不变（配置只在启动时读取）。
 bool AIConfig::loadFromFile(const std::string& path) {
     static std::string cachedPath;
     static bool cached = false;
+    static bool cachedOk = false;
     static AIConfig cachedConfig;
     if (cached && path == cachedPath) {
         *this = cachedConfig;
-        return true;
+        // 【返回值必须一起缓存】旧实现无论上次成功与否都 return true，
+        // 于是"文件不存在"这个结果被缓存成"加载成功"，调用方只能靠
+        // cfg.enabled 兜底，日志与真实结果的语义就此分家。
+        return cachedOk;
     }
 
     std::ifstream f(path);
     if (!f.is_open()) {
-        printf(">> AIConfig: config.json not found, API player disabled.\n");
+        // 【必须打印实际路径】只写 "config.json not found" 时，
+        // 从 build/Release 启动根本看不出它到底在哪个目录找。
+        // 调用方会依次试 3 个候选，这里各报一条、各带路径，才能定位。
+        printf(">> AIConfig: not found: %s\n", path.c_str());
         enabled = false;
         cachedPath = path;
         cachedConfig = *this;
+        cachedOk = false;
         cached = true;
         return false;
     }
@@ -54,11 +64,17 @@ bool AIConfig::loadFromFile(const std::string& path) {
         }
         cachedPath = path;
         cachedConfig = *this;
+        cachedOk = true;
         cached = true;
         return true;
     } catch (const std::exception& e) {
-        printf(">> AIConfig: parse error: %s\n", e.what());
+        printf(">> AIConfig: parse error in %s: %s\n", path.c_str(), e.what());
         enabled = false;
+        // 坏文件同样缓存：否则每次构建玩家目录都要重新解析、重复报错
+        cachedPath = path;
+        cachedConfig = *this;
+        cachedOk = false;
+        cached = true;
         return false;
     }
 }

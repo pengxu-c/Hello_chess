@@ -42,7 +42,6 @@ public:
     std::string id() const override { return "human"; }
     std::string displayName() const override { return "Human"; }
     bool human() const override { return true; }
-    bool async() const override { return false; }
     Decision tick(const ViewState&, const ThinkBudget&) override {
         return Decision::pass("human input comes from the view, not from tick()");
     }
@@ -65,6 +64,10 @@ public:
 
     Coord decide(int boardSize, int winLength, const std::vector<Move>& history,
                  Stone color) override {
+        // L2 纵深防御：入口夹取，阻断绕过归一化直达 Board 的非法尺寸
+        if (boardSize < 4 || boardSize > 30) boardSize = 15;
+        if (winLength < 4 || winLength > 15) winLength = 5;
+        if (winLength > boardSize) winLength = boardSize;
         if (board_.size() != boardSize) {
             board_.resize(boardSize);
             builtMoves_ = -1;

@@ -41,8 +41,11 @@ namespace {
 int g_pass = 0;
 int g_fail = 0;
 int g_skipped = 0;   // 环境不具备而跳过的项：既不算通过，也不算失败
+int g_checks = 0;    // 实际执行的 check() 条数（段数完整性校验用）
+constexpr int kExpectedChecks = 59;  // 原全绿 56 项 + 本批净增 3 条
 
 void check(bool ok, const std::string& what) {
+    ++g_checks;
     if (ok) {
         ++g_pass;
         std::printf("  [ ok ] %s\n", what.c_str());
@@ -141,13 +144,26 @@ void testRules() {
         check(unset.boardSize == 15 && unset.winLength == 5, "unset win length -> default 5");
 
         const RulesConfig tooBig = RulesConfig{ 4, 15 }.normalized();
-        check(tooBig.winLength <= tooBig.boardSize,
-              "win length never exceeds board size (" + std::to_string(tooBig.boardSize) +
-                  "x" + std::to_string(tooBig.boardSize) + ", connect " +
-                  std::to_string(tooBig.winLength) + ")");
+        check(tooBig.boardSize == 4 && tooBig.winLength == 4,
+              "normalized {4,15} clamps winLength to boardSize without inflating the board");
 
         const RulesConfig hugeBoard = RulesConfig{ 99, 5 }.normalized();
         check(hugeBoard.boardSize == 15, "board size is clamped to a sane range");
+
+        const RulesConfig upper = RulesConfig{ RulesConfig::kMaxBoardSize, 20 }.normalized();
+        check(upper.boardSize == RulesConfig::kMaxBoardSize &&
+                  upper.winLength == RulesConfig::kMaxWinLength,
+              "normalized {30,20} keeps the board cap and caps connect at 15");
+
+        const RulesConfig hugeWin = RulesConfig{ 15, 100 }.normalized();
+        check(hugeWin.boardSize == 15 &&
+                  hugeWin.winLength == RulesConfig::kMaxWinLength &&
+                  hugeWin.winLength <= hugeWin.boardSize,
+              "normalized {15,100} clamps connect to the absolute cap (and it fits the board)");
+
+        const RulesConfig longWin = RulesConfig{ 15, 20 }.normalized();
+        check(longWin.boardSize == 15 && longWin.winLength == RulesConfig::kMaxWinLength,
+              "normalized {15,20} clamps an over-long connect to 15");
     }
 }
 
@@ -394,6 +410,7 @@ void testSlowView(const std::string& dataDir) {
     SessionStateReader reader(*session);
     slow.bind(&reader);
     session->addObserver(&slow);
+    const int baseRenders = slow.renders();  // =1：addObserver 注册即同步首帧
     session->start();
 
     // 人类 vs AI：每一手都会触发 render()，每次 render 都会走上面那条锁链。
@@ -421,8 +438,9 @@ void testSlowView(const std::string& dataDir) {
     check(moves >= 3, "kernel keeps advancing while the view holds its own lock (" +
                           std::to_string(moves) + " moves, placed " +
                           std::to_string(placed) + ")");
-    check(slow.renders() > 0, "the slow view did receive frames (" +
-                                  std::to_string(slow.renders()) + ")");
+    check(slow.renders() > baseRenders,
+          "the slow view received frames BEYOND the attach frame (" +
+              std::to_string(slow.renders() - baseRenders) + ")");
 
     session->requestQuit();
     session->join(3000);
@@ -542,9 +560,20 @@ void testHttp(const std::string& webRoot, const std::string& dataDir) {
         check(false, "unknown endpoint returns 404");
     }
 
-    session->requestQuit();
-    session->join(2000);
     driver.stop();
+    // ---- 收尾顺序（UAF窗口B）----
+    // dispatchNotifications在锁外用observers_裸指针render；已取到局部frame、
+    // 正在锁外render的在途帧不受removeObserver影响（窗口A只保证之后的帧不含view）。
+    // 局部变量按声明逆序析构时view先于session销毁，必须先摘观察者、请求退出，
+    // 再循环join到控制线程真正结束，才能确认锁外render已完成、不会再碰view。
+    session->removeObserver(view.get());
+    session->requestQuit();
+    // finished_仅在controlLoop末尾置位，join只在它为真时才真join；
+    // 循环到finished_为真，总上限50×200ms=10s避免异常情况下死等。
+    for (int i = 0; i < 50 && !session->finished(); ++i) {
+        session->join(200);
+    }
+    session->join(2000);   // 真正回收joinable线程，幂等
 }
 
 // ------------------------------------------------------------
@@ -639,39 +668,62 @@ int SelfTestHost::run() {
     std::fflush(stdout);
 
     // --hold N：自检结束后继续把网页界面挂 N 秒，便于人工/脚本用真浏览器验收。
+    // 用 lambda 收口：两处早退只结束 hold 子过程、不提前 return，统一走末尾四态退出码。
     if (holdSeconds > 0) {
-        if (webRoot.empty()) {
-            std::printf("[hold] webapp not found, cannot serve the UI\n");
-            return 1;
-        }
-        auto session = std::make_unique<MatchSession>(makeLegacyStorageGateway(dataDir));
-        ViewContext ctx;
-        ctx.webRoot = webRoot;
-        ctx.port = opts_.port;
-        ctx.headless = true;
-        std::unique_ptr<IView> view = createView("web", ctx);
-        if (!view) {
-            std::printf("[hold] web view unavailable\n");
-            return 1;
-        }
-        auto* web = dynamic_cast<WebView*>(view.get());
-        std::printf("[hold] serving the web UI for %d s at http://127.0.0.1:%d/\n",
-                    holdSeconds, web ? web->port() : opts_.port);
-        std::printf("[hold] this process exits by itself when the countdown ends; "
-                    "press Ctrl+C to stop it now.\n");
-        std::fflush(stdout);
+        [&] {
+            if (webRoot.empty()) {
+                std::printf("[hold] webapp not found, cannot serve the UI\n");
+                return;
+            }
+            auto session = std::make_unique<MatchSession>(makeLegacyStorageGateway(dataDir));
+            ViewContext ctx;
+            ctx.webRoot = webRoot;
+            ctx.port = opts_.port;
+            ctx.headless = true;
+            std::unique_ptr<IView> view = createView("web", ctx);
+            if (!view) {
+                std::printf("[hold] web view unavailable\n");
+                return;
+            }
+            auto* web = dynamic_cast<WebView*>(view.get());
+            std::printf("[hold] serving the web UI for %d s at http://127.0.0.1:%d/\n",
+                        holdSeconds, web ? web->port() : opts_.port);
+            std::printf("[hold] this process exits by itself when the countdown ends; "
+                        "press Ctrl+C to stop it now.\n");
+            std::fflush(stdout);
 
-        session->addObserver(view.get());
-        session->start();
-        ViewDriver driver(*view, session.get());
-        driver.start();
-        std::this_thread::sleep_for(std::chrono::seconds(holdSeconds));
-        driver.stop();
-        session->requestQuit();
-        session->join(2000);
+            session->addObserver(view.get());
+            session->start();
+            ViewDriver driver(*view, session.get());
+            driver.start();
+            std::this_thread::sleep_for(std::chrono::seconds(holdSeconds));
+            driver.stop();
+            // ---- 收尾顺序（UAF窗口B）----
+            // 同testHttp：先摘观察者、请求退出，再循环join到控制线程真正结束，
+            // 确保view（lambda局部）活到锁外render完成、join成功返回之后才析构。
+            session->removeObserver(view.get());
+            session->requestQuit();
+            // finished_仅在controlLoop末尾置位，循环上限50×200ms=10s避免死等。
+            for (int i = 0; i < 50 && !session->finished(); ++i) {
+                session->join(200);
+            }
+            session->join(2000);   // 真正回收joinable线程，幂等
+        }();
     }
 
-    return g_fail == 0 ? 0 : 1;
+    if (g_fail != 0) return 1;
+    if (g_skipped > 0) {
+        std::printf("[result] %d skipped, coverage incomplete\n", g_skipped);
+        std::fflush(stdout);
+        return 2;
+    }
+    if (g_checks != kExpectedChecks) {
+        std::printf("[result] only %d/%d checks executed, coverage incomplete\n",
+                    g_checks, kExpectedChecks);
+        std::fflush(stdout);
+        return 3;
+    }
+    return 0;
 }
 
 }  // namespace gomoku

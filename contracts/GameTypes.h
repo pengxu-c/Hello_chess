@@ -59,21 +59,33 @@ inline bool isFinished(const std::string& s) {
 
 // ---- 一局棋的规则配置（由界面插件在「开新局」时提供） ----
 struct RulesConfig {
-    int boardSize = 15;   // N×N（4..30）
-    int winLength = 5;    // 连珠获胜数（4..boardSize）
+    // 引擎侧硬编码的容量上限（单一事实来源，归一化与棋盘 reset 都引用它）：
+    //   winLength <= 15：engine/tactical_max.cpp 的 kMaxWinLen=15、
+    //     std::array<int,15> cells、int sig[15] 都是定长，超了会越界写；
+    //   boardSize <= 30：engine/player.h 与 tactical_max.cpp 的棋盘上限。
+    // 这两条不是"建议范围"而是绝对上界，必须在归一化入口夹死。
+    static constexpr int kMaxBoardSize = 30;
+    static constexpr int kMaxWinLength = 15;
+
+    int boardSize = 15;   // N×N（4..kMaxBoardSize）
+    int winLength = 5;    // 连珠获胜数（4..min(boardSize, kMaxWinLength)）
 
     // 归一化到可玩范围。两条硬约束：
     //   1) 连珠数至少 4（少于 4 不是五子棋，也几乎必然立刻结束）
     //   2) 连珠数不能超过棋盘边长（否则这盘棋永远赢不了，只能下到和棋）
-    // 处理顺序刻意是"先修连珠数、再修尺寸、最后夹住连珠数"，
-    // 这样无论用户/存档给出多离谱的组合，结果一定是一盘能正常结束的棋。
+    // 另外两条绝对上界（见 kMaxBoardSize / kMaxWinLength）：boardSize <= 30、
+    // winLength <= 15，越界会让引擎定长数组越界写。
+    // 处理顺序刻意是"先给连珠数夹绝对区间、再给尺寸夹绝对区间、最后用尺寸
+    // 夹住连珠数"，两个字段互不抬升；不能反过来——早期把
+    // "boardSize < winLength 时抬高 boardSize"放在 30 上界之后，
+    // 会让任意大的 winLength 把 boardSize 顶爆，正是本次修复的根因。
     RulesConfig normalized() const {
         RulesConfig out = *this;
-        if (out.winLength < 4) out.winLength = 5;      // 未设置或明显非法 → 回到默认
-
-        if (out.boardSize < 4 || out.boardSize > 30) out.boardSize = 15;
-        if (out.boardSize < out.winLength) out.boardSize = out.winLength;
-
+        // 先给两个字段各自的绝对区间，互不抬升对方。
+        if (out.winLength < 4) out.winLength = 5;                    // 保持原回默认语义
+        else if (out.winLength > kMaxWinLength) out.winLength = kMaxWinLength;
+        if (out.boardSize < 4 || out.boardSize > kMaxBoardSize) out.boardSize = 15;
+        // 删掉了原来 if (boardSize < winLength) boardSize = winLength;
         if (out.winLength > out.boardSize) out.winLength = out.boardSize;
         return out;
     }
@@ -138,7 +150,9 @@ struct ViewState {
     // ---- 便捷读取 ----
     Stone at(int r, int c) const {
         if (r < 0 || c < 0 || r >= boardSize || c >= boardSize) return Stone::Empty;
-        return static_cast<Stone>(cells[static_cast<size_t>(r) * boardSize + c]);
+        const size_t index = static_cast<size_t>(r) * boardSize + c;
+        if (index >= cells.size()) return Stone::Empty;   // 快照字段不一致时防越界读
+        return static_cast<Stone>(cells[index]);
     }
     bool finished() const { return isFinished(status); }
 };

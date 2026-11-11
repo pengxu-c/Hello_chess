@@ -41,7 +41,7 @@ public:
     bool inBounds(int r, int c) const;              // 坐标是否在棋盘内
     int size() const { return size_; }              // 当前棋盘尺寸
     int winLen() const { return winLen_; }          // 连珠获胜数
-    void setWinLen(int k) { winLen_ = k; }          // 设置连珠获胜数
+    void setWinLen(int k) { if (k >= 4 && k <= 15 && k <= size_) winLen_ = k; }  // 设置连珠获胜数（非法值拒绝，保留原值）
 private:
     std::vector<int> map_;      // 一维棋盘数组（大小 size_*size_，索引 r*size_+c）
     int size_ = 0;              // 当前棋盘实际尺寸

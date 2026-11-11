@@ -51,11 +51,11 @@ set(GOMOKU_CORE_SOURCES
     plugins/ViewRegistry.cpp
     plugins/views/CliView.cpp
     plugins/views/WebView.cpp
-    plugins/views/EasyXView.cpp
 
-    # ---- 旧版 EasyX 界面（2026-09 原件，从 git 取回，逻辑未改）----
-    # 它面向旧引擎（Board/Pos），由 plugins/views/EasyXView.cpp 做类型适配。
-engine/legacy_easyx/ui.cpp
+    # ---- EasyX 界面不在这里，见下方 if(EASYX_FOUND) 分支 ----
+    # 原因：它需要 easyx.h 与 EasyXw.lib，且 easyx.h 用 #pragma comment(lib)
+    # 把静态库强行拉进本目标。找不到头文件时若仍参与编译，整个 hello_chess
+    # 会直接失败（旧注释说的"不影响其它目标"并不成立）。改为条件加入。
 
     # ---- 插件：存储 ----
     plugins/storage/LegacyStorageGateway.cpp
@@ -92,17 +92,24 @@ engine/legacy_easyx/ui.cpp
 #  所以只要头文件能被找到，链接就自动完成 —— 这正是 EasyX
 #  "不需要配置链接器" 的由来。
 #
-#  【路径里有空格】
-#  "Visual studio" 含空格，CMake 里必须加引号，否则会被拆成两个参数。
-#  路径不存在时不会报错：include 目录找不到只是编译该文件时报缺头文件，
-#  不影响其它目标（bench 不含 EasyXView）。
+#  【路径里有空格 / VS 换版本】
+#  旧路径 "Visual studio" 含空格，CMake 里必须加引号，否则会被拆成两个参数。
+#  2026-11 本机 VS 升级到 18 2026、安装目录改为 D:/visualstudio，旧实例连同
+#  集成进去的 easyx.h 一起消失。EasyX 需要随新 VS 重新安装一次；在此之前
+#  可用 EASYX_LOCAL_PATH 指向独立安装目录，或 -DGOMOKU_WITH_EASYX=OFF 关掉插件。
+#  路径不存在时不会报错：只是该界面插件不参与编译，其余目标不受影响。
 # ============================================================================
 set(EASYX_INCLUDE_DIR "$ENV{EASYX_LOCAL_PATH}/include"
+    "D:/visualstudio/VC/Auxiliary/VS/include"
     "D:/Visual studio/VS2022/VC/Auxiliary/VS/include"
     "C:/Program Files (x86)/EasyX/include"
     "C:/EasyX/include"
 )
+# 是否编译 EasyX 界面插件。没有装 EasyX 的机器上用 -DGOMOKU_WITH_EASYX=OFF 关闭。
+option(GOMOKU_WITH_EASYX "Build the EasyX view plugin (requires easyx.h)" ON)
+
 set(EASYX_FOUND "")
+
 foreach(dir IN LISTS EASYX_INCLUDE_DIR)
     if(EXISTS "${dir}/easyx.h")
         set(EASYX_FOUND "${dir}")
@@ -119,19 +126,17 @@ endif()
 add_executable(hello_chess ${GOMOKU_CORE_SOURCES})
 
 # ============================================================================
-#  输出文件名：hello_chess.exe
+#  输出文件名：Gomoku.exe
 #
-#  【为什么只改 OUTPUT_NAME，不改目标名】
-#   目标名（Gomoku）用于构建期，输出名（hello_chess.exe）用于交付。
-#   分开的好处：install/打包脚本按 hello_chess.exe 找，代码里的日志与
-#   报错仍然知道自己在构建 Gomoku 这个目标，两边都不别扭。
+#  【为什么目标名仍然叫 hello_chess】
+#   目标名只在构建期可见（.sln / .vcxproj 的文件名），改它要重新 configure；
+#   交付名由 OUTPUT_NAME 决定，改这一处就够。
 #
-#  【想改回 Gomoku.exe】
-#   把下面这行删掉即可，CMake 默认输出 ${PROJECT_NAME}.exe。
+#  【历史坑】README 一直按 Gomoku.exe 写，而这里曾经输出
+#  hello_chess.exe，于是照着文档找程序的人找不到东西。现在以文档为准，
+#  统一成 Gomoku.exe —— 文档与产物只能有一个是对的。
 # ============================================================================
-# 输出名与工程名一致，这行其实可省略（CMake 默认用 ${PROJECT_NAME}），
-# 保留是为了让"exe 叫什么"这件事在这里显式可见。
-set_target_properties(hello_chess PROPERTIES OUTPUT_NAME "hello_chess")
+set_target_properties(hello_chess PROPERTIES OUTPUT_NAME "Gomoku")
 
 # 【为什么用控制台子系统，而不是 Windows 子系统】
 #   实测：Windows 子系统（WIN32_EXECUTABLE TRUE）下，--list / --selfplay 这类
@@ -148,8 +153,14 @@ target_include_directories(hello_chess PRIVATE
 # EasyX 头文件（easyx.h 内部用 #pragma comment(lib) 自动链接 EasyXw/EasyXa，
 # 因此这里只给头文件路径即可，不要 target_link_libraries）。
 # 见上文"EasyX 图形窗口界面"一节对 EASYX_FOUND 的说明。
-if(EASYX_FOUND)
+if(EASYX_FOUND AND GOMOKU_WITH_EASYX)
     target_include_directories(hello_chess PRIVATE ${EASYX_FOUND})
+    # EasyX 界面插件只在能编译时加入，并用宏告诉 ViewRegistry 是否注册它。
+    target_sources(hello_chess PRIVATE
+        plugins/views/EasyXView.cpp
+        engine/legacy_easyx/ui.cpp
+    )
+    target_compile_definitions(hello_chess PRIVATE GOMOKU_HAS_EASYX=1)
 endif()
 
 target_compile_definitions(hello_chess PRIVATE UNICODE _UNICODE)
@@ -249,13 +260,13 @@ add_custom_command(TARGET hello_chess POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_CURRENT_SOURCE_DIR}/webapp
             $<TARGET_FILE_DIR:hello_chess>/webapp
-    COMMENT "Copying webapp/ next to hello_chess.exe"
+    COMMENT "Copying webapp/ next to Gomoku.exe"
 )
 
 if(GOMOKU_RUNTIME_DLLS)
     add_custom_command(TARGET hello_chess POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${GOMOKU_RUNTIME_DLLS} $<TARGET_FILE_DIR:hello_chess>
-        COMMENT "Copying runtime DLLs (libcurl etc.) next to hello_chess.exe"
+        COMMENT "Copying runtime DLLs (libcurl etc.) next to Gomoku.exe"
     )
 endif()

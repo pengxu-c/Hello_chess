@@ -29,7 +29,7 @@ int WebHost::run() {
     if (webRoot.empty()) {
         std::fprintf(stderr,
                      "cannot find webapp/index.html.\n"
-                     "expected a 'webapp' folder next to hello_chess.exe "
+                     "expected a 'webapp' folder next to Gomoku.exe "
                      "(or up to 4 levels above it).\n");
         return 1;
     }
@@ -65,7 +65,8 @@ int WebHost::run() {
     // 通知入口：服务已就绪（双击启动时入口会据此弹一个可见提示）
     if (ready_) ready_(url, opts_.port <= 0);
 
-    // ---- 起步：不自动开局，让用户在网页里选人（--start 可自动开局） ----
+    // ---- 起步：默认直接开局，打开网页就能落子 ----
+    // 想先选人再开局的用户用 --no-start；网页里的 New Game 对话框仍可随时换人。
     session.start();
     if (opts_.autoStart) {
         session.startGame(opts_.rules, opts_.black, opts_.white, opts_.storage);
@@ -80,8 +81,18 @@ int WebHost::run() {
     }
     driver.stop();
 
+    // ---- 收尾顺序（UAF窗口B）----
+    // controlLoop的dispatchNotifications会在锁外用observers_里的裸指针render，
+    // 而局部变量按声明逆序析构时view先于session销毁。必须先摘观察者、请求退出，
+    // 再循环join到控制线程真正结束，才能确认锁外render已完成、不会再碰view。
+    session.removeObserver(view.get());
     session.requestQuit();
-    session.join(2000);
+    // finished_仅在controlLoop末尾（或异常兜底）置位，join只在它为真时才真join。
+    // 循环到finished_为真，总上限50×200ms=10s避免异常情况下死等。
+    for (int i = 0; i < 50 && !session.finished(); ++i) {
+        session.join(200);
+    }
+    session.join(2000);   // 真正回收joinable线程，幂等
     return 0;
 }
 

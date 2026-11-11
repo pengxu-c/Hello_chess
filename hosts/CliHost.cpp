@@ -44,6 +44,20 @@ int CliHost::run() {
     vctx.headless = opts_.headless;
     vctx.port = opts_.port;
     std::unique_ptr<IView> view = createView(opts_.view, vctx);
+
+    // 【失败要能降级，不能直接退出】
+    //   默认界面是 easyx，而 EasyX 是可选依赖：没装 easyx.h 时该插件根本不存在，
+    //   机器没有图形环境时 open() 也会失败。以前这里直接 return 1，
+    //   表现为"双击没反应、只闪一下控制台"，用户完全不知道发生了什么。
+    //   现在：首选界面不可用 → 退回终端界面继续玩 → 只有终端也起不来才失败。
+    if (!view && opts_.view != "cli") {
+        std::fprintf(stderr,
+                     "[view] '%s' 不可用，已回退到终端界面（cli）。\n"
+                     "[view] 用 --view <id> 指定其它界面，--views 查看全部可用界面。\n",
+                     opts_.view.c_str());
+        std::fflush(stderr);
+        view = createView("cli", vctx);
+    }
     if (!view) {
         std::fprintf(stderr, "view plugin '%s' unavailable\n", opts_.view.c_str());
         std::fprintf(stderr, "use --views to list the available view plugins\n");
@@ -63,8 +77,18 @@ int CliHost::run() {
     }
     driver.stop();
 
+    // ---- 收尾顺序（UAF窗口B）----
+    // controlLoop的dispatchNotifications会在锁外用observers_里的裸指针render，
+    // 而局部变量按声明逆序析构时view先于session销毁。必须先摘观察者、请求退出，
+    // 再循环join到控制线程真正结束，才能确认锁外render已完成、不会再碰view。
+    session.removeObserver(view.get());
     session.requestQuit();
-    session.join(2000);
+    // finished_仅在controlLoop末尾（或异常兜底）置位，join只在它为真时才真join。
+    // 循环到finished_为真，总上限50×200ms=10s避免异常情况下死等。
+    for (int i = 0; i < 50 && !session.finished(); ++i) {
+        session.join(200);
+    }
+    session.join(2000);   // 真正回收joinable线程，幂等
     return 0;
 }
 

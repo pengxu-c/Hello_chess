@@ -17,8 +17,10 @@
 //
 #include "../contracts/ViewRegistry.h"
 #include "views/CliView.h"
-#include "views/EasyXView.h"
 #include "views/WebView.h"
+#ifdef GOMOKU_HAS_EASYX
+#include "views/EasyXView.h"
+#endif
 
 namespace gomoku {
 
@@ -46,6 +48,11 @@ void registerBuiltinViews(ViewRegistry& reg) {
     // 而窗口必须在构造完成后立刻创建，否则第一次 poll() 会在未初始化的
     // 绘图上下文里画东西。创建失败则返回 nullptr —— main_microkernel.cpp
     // 会自动把所有非 web 界面交给 CliHost，无需在这里或入口做任何判断。
+    //
+    // 【为什么整段要 #ifdef】EasyX 是可选依赖（头文件 + 静态库），
+    // 没装 EasyX 的机器上这个插件根本编不出来；用宏包住后，
+    // 其余界面与内核不受影响（宏由 CMake 在找到 easyx.h 时定义）。
+#ifdef GOMOKU_HAS_EASYX
     reg.add(ViewInfo{ "easyx", "EasyX (window)",
                       "原生图形窗口，鼠标点击落子（无需浏览器）" },
             [](const ViewContext& ctx) -> std::unique_ptr<IView> {
@@ -53,6 +60,7 @@ void registerBuiltinViews(ViewRegistry& reg) {
                 if (!view->open()) return nullptr;
                 return view;
             });
+#endif
 
     // ==== 你的界面加在这里 ====
     // reg.add(ViewInfo{ "my-view", "My View", "一句话说明" },

@@ -5,7 +5,14 @@ deepseek/
 **/deepseek/
 
 # ========== 构建目录 ==========
-build/
+# 【为什么写成 build/* 再逐层放行，而不是 build/ 加 !例外】
+#   Git 的规则是：父目录一旦被排除，子路径的 "!" 例外**不生效**。
+#   旧写法 `build/` + `!build/Release/libcurl.dll` 等于没写例外，
+#   换台机器 clone 下来就没有 DLL，双击直接启动失败 —— 正是注释想避免的场景。
+build/*
+!build/Release/
+build/Release/*
+
 build-*/
 out/
 cmake-build-*/
@@ -38,6 +45,10 @@ clattervault/
 # libcurl.dll / z.dll 是 API AI 玩家的工作前提（vcpkg 的 libcurl.lib 只有 22KB，
 # 是导入库，真实现现在 DLL 里）。构建时 CMake 会把它们拷到 exe 旁边，
 # 因此这些"编译产物"其实是运行时必需品，必须提交，否则换台机器就起不来。
+#
+# 【位置有讲究】Git 以**最后一条匹配的规则**为准，所以这两行必须放在
+# 上面 `build/*`、`build/Release/*` 与下面 `*.dll` 的**后面**。
+# 放前面会被 *.dll 重新吃掉，等于没写。
 !build/Release/libcurl.dll
 !build/Release/z.dll
 

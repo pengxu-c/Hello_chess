@@ -14,9 +14,11 @@
 #include "../../app/JsonProtocol.h"
 #include "../../contracts/PlayerRegistry.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <thread>
+#include <vector>
 
 namespace gomoku {
 namespace {
@@ -39,12 +41,17 @@ nlohmann::json parseBody(const std::string& body) {
 
 }  // namespace
 
+// 取值统一走协议层的 jsonValueOr（app/JsonProtocol.h），避免两处各写一份
+// 容错逻辑、将来一边修了另一边漏掉。本文件已在 gomoku 命名空间内，直接可见。
+
 WebView::WebView(std::string webRoot, int port, bool openBrowser, bool headless)
     : webRoot_(std::move(webRoot)), port_(port),
       openBrowser_(openBrowser), headless_(headless) {}
 
 WebView::~WebView() {
     done_.store(true);
+    frameCv_.notify_all();   // 唤醒阻塞在 wait_for(15s) 的 SSE 线程，避免退出卡顿
+    cmdCv_.notify_all();     // 唤醒等待命令的 poll()
     if (server_) server_->stop();
 }
 
@@ -58,17 +65,13 @@ bool WebView::start() {
         // 先占一个订阅名额，拿不到就直接断开：宁可让浏览器重连，
         // 也不能让堆积的 SSE 长连接把 httplib 的线程池吃光，
         // 否则连 POST /api/cmd 都会排队等不到工作线程。
-        {
-            const int now = subscriberCount_.fetch_add(1);
-            if (now >= kMaxSubscribers) {
-                subscriberCount_.fetch_sub(1);
-                if (debugTrace_)
-                    std::fprintf(stderr,
-                                 "[web] SSE refused: %d subscribers already active\n",
-                                 now);
-                stream.push(": too many subscribers\n\n");
-                return;   // 立刻结束，释放这个工作线程
-            }
+        // 用 load() 判断即可：SubscriberGuard 负责 +1/-1，
+        // 这里不再手动 fetch_add（否则每条连接净 +1，8 次后永久拒绝）。
+        if (subscriberCount_.load() >= kMaxSubscribers) {
+            if (debugTrace_)
+                std::fprintf(stderr, "[web] SSE refused: subscriber limit reached\n");
+            stream.push(": too many subscribers\n\n");
+            return;   // 立刻结束，释放这个工作线程
         }
         SubscriberGuard guard(subscriberCount_);
 
@@ -162,42 +165,52 @@ bool WebView::poll() {
 // 把一条 JSON 命令翻译成对 IControllable 的调用。
 // 这是整个 Web 界面里唯一「知道命令语义」的地方 —— 前端只发字符串。
 void WebView::dispatchCommand(const std::string& raw) {
-    nlohmann::json j = nlohmann::json::parse(raw, nullptr, false);
-    if (j.is_discarded() || !j.is_object()) return;
+    // 命令链是 poll() → ViewDriver::loop()，运行在界面线程。
+    // 任何异常穿透线程入口都会直接 std::terminate，httplib 普通路由的
+    // try/catch 兜不住跨线程分发，因此这里整体兜底并吞掉。
+    try {
+        nlohmann::json j = nlohmann::json::parse(raw, nullptr, false);
+        if (j.is_discarded() || !j.is_object()) return;
 
-    const std::string op = j.value("op", std::string());
-    if (debugTrace_) std::fprintf(stderr, "[web] dispatch op=%s\n", op.c_str());
-    if (op == "new") {
-        const NewGameRequest req = parseNewGame(j);
-        session_->startGame(req.rules, req.black, req.white, req.storageEnabled);
-    } else if (op == "move") {
-        session_->play(j.value("r", -1), j.value("c", -1));
-    } else if (op == "undo") {
-        session_->undo(j.value("steps", 1));
-    } else if (op == "abort") {
-        session_->abort();
-    } else if (op == "swap") {
-        const int seat = j.value("seat", 0);
-        session_->swapPlayer(seat == 0 ? Stone::Black : Stone::White,
-                             j.value("playerId", std::string("human")));
-    } else if (op == "save") {
-        session_->saveResume(j.value("note", std::string()));
-    } else if (op == "load") {
-        session_->loadResume(j.value("id", std::string()));
-    } else if (op == "storage") {
-        session_->setStorageEnabled(j.value("enabled", true));
-    } else if (op == "quit") {
-        done_.store(true);
-        if (session_) session_->requestQuit();
+        const std::string op = jsonValueOr(j, "op", std::string());
+        if (debugTrace_) std::fprintf(stderr, "[web] dispatch op=%s\n", op.c_str());
+        if (op == "new") {
+            const NewGameRequest req = parseNewGame(j);
+            session_->startGame(req.rules, req.black, req.white, req.storageEnabled);
+        } else if (op == "move") {
+            session_->play(jsonValueOr(j, "r", -1), jsonValueOr(j, "c", -1));
+        } else if (op == "undo") {
+            session_->undo(jsonValueOr(j, "steps", 1));
+        } else if (op == "abort") {
+            session_->abort();
+        } else if (op == "swap") {
+            const int seat = jsonValueOr(j, "seat", 0);
+            session_->swapPlayer(seat == 0 ? Stone::Black : Stone::White,
+                                 jsonValueOr(j, "playerId", std::string("human")));
+        } else if (op == "save") {
+            session_->saveResume(jsonValueOr(j, "note", std::string()));
+        } else if (op == "load") {
+            session_->loadResume(jsonValueOr(j, "id", std::string()));
+        } else if (op == "storage") {
+            session_->setStorageEnabled(jsonValueOr(j, "enabled", true));
+        } else if (op == "quit") {
+            done_.store(true);
+            if (session_) session_->requestQuit();
+        }
+    } catch (...) {
+        std::fprintf(stderr, "[web] dispatchCommand: unexpected exception, command dropped\n");
+        std::fflush(stderr);
     }
 }
 
-void WebView::pushCommand(const std::string& json) {
+bool WebView::pushCommand(const std::string& json) {
     {
         std::lock_guard<std::mutex> lk(cmdMtx_);
+        if (static_cast<int>(commands_.size()) >= kMaxPendingCommands) return false;
         commands_.push_back(json);
     }
     cmdCv_.notify_all();
+    return true;
 }
 
 // ============================================================
@@ -211,9 +224,17 @@ HttpReply WebView::handleRequest(const std::string& method, const std::string& p
 
     // ---- 查询（GET） ----
     if (path == "/api/state") {
-        std::lock_guard<std::mutex> lk(frameMtx_);
-        if (!haveFrame_) return jsonReply(nlohmann::json::object());
-        return jsonReply(nlohmann::json::parse(lastFrameJson_, nullptr, false));
+        // 锁内只拷贝字符串；parse/dump 放到锁外，别让一次状态查询
+        // 拖住正在 render 的内核帧或正在推送的 SSE 连接。
+        std::string snapshot;
+        {
+            std::lock_guard<std::mutex> lk(frameMtx_);
+            if (!haveFrame_) return jsonReply(nlohmann::json::object());
+            snapshot = lastFrameJson_;
+        }
+        nlohmann::json j = nlohmann::json::parse(snapshot, nullptr, false);
+        if (j.is_discarded()) return jsonReply(nlohmann::json::object());
+        return jsonReply(j);
     }
     if (path == "/api/players") {
         return jsonReply(playerCatalogJson(playerCatalog()));
@@ -235,13 +256,24 @@ HttpReply WebView::handleRequest(const std::string& method, const std::string& p
         if (body.empty()) return jsonReply(errJson("empty body"), 400);
         nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
         if (j.is_discarded() || !j.is_object()) return jsonReply(errJson("bad json"), 400);
-        pushCommand(body);
+        // op 必须是字符串且在白名单内：未知 op 不让它进命令队列。
+        auto opIt = j.find("op");
+        if (opIt == j.end() || !opIt->is_string())
+            return jsonReply(errJson("bad op"), 400);
+        const std::string op = opIt->get<std::string>();
+        static const std::vector<std::string> kAllowedOps = {
+            "new", "move", "undo", "abort", "swap", "save", "load", "storage", "quit"
+        };
+        if (std::find(kAllowedOps.begin(), kAllowedOps.end(), op) == kAllowedOps.end())
+            return jsonReply(errJson("unknown op"), 400);
+        if (!pushCommand(body))
+            return jsonReply(errJson("command queue full"), 429);
         return jsonReply(okJson());
     }
     if (method == "POST" && path == "/api/replay") {
         const nlohmann::json b = parseBody(body);
-        const ReplayFrame f = session_->replay(b.value("id", std::string()),
-                                               b.value("step", -1));
+        const ReplayFrame f = session_->replay(jsonValueOr(b, "id", std::string()),
+                                               jsonValueOr(b, "step", -1));
         nlohmann::json j;
         j["ok"] = f.ok;
         if (f.ok) {

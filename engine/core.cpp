@@ -17,22 +17,24 @@ Board::~Board() {}
 // 按尺寸 n 重建 n×n 棋盘并清零（配置更改尺寸后调用）
 // 同时重置空位计数为 n*n（满盘空位）
 void Board::resize(int n) {
+    if (n < 1) n = 1;
+    if (n > 30) n = 30;   // 与 RulesConfig::kMaxBoardSize 一致
     size_ = n;
-    map_.assign(static_cast<size_t>(n) * n, 0);   // 一维 n*n 全 0
-    emptyCount_ = n * n;
+    map_.assign(static_cast<size_t>(n) * static_cast<size_t>(n), 0);   // 一维 n*n 全 0
+    emptyCount_ = static_cast<int>(map_.size());
 }
 
 // 清空棋盘：所有格子归零，空位计数恢复为 size_*size_
 // 不改变尺寸 size_ 与连珠数 winLen_
 void Board::clear() {
     std::fill(map_.begin(), map_.end(), 0);
-    emptyCount_ = size_ * size_;
+    emptyCount_ = static_cast<int>(map_.size());
 }
 
 // 落子：仅空位成功，成功时维护 emptyCount_--
 bool Board::place(int r, int c, ChessType color) {
     if (!inBounds(r, c)) return false;
-    int idx = r * size_ + c;
+    size_t idx = static_cast<size_t>(r) * size_ + c;
     if (map_[idx] != static_cast<int>(ChessType::None)) return false;
     map_[idx] = static_cast<int>(color);
     emptyCount_--;
@@ -43,7 +45,7 @@ bool Board::place(int r, int c, ChessType color) {
 // 供悔棋/回放重建使用——用 set 清格不会维护 emptyCount_，会让 isFull 失真）
 bool Board::unset(int r, int c) {
     if (!inBounds(r, c)) return false;
-    int idx = r * size_ + c;
+    size_t idx = static_cast<size_t>(r) * size_ + c;
     if (map_[idx] == static_cast<int>(ChessType::None)) return false;
     map_[idx] = static_cast<int>(ChessType::None);
     emptyCount_++;

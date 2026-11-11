@@ -10,9 +10,10 @@
 // 【线程模型】（面试常问的那种，这里写清楚）
 //   * 控制线程：唯一可以改棋盘的线程。所有命令都在它上面串行执行。
 //   * 调用方线程（HTTP / 界面）：只做两件事 —— 投递命令、读只读快照。
-//   * AI 思考：AI 玩家自己在后台线程里跑（IPlayer::async 为 true 时），
-//     思考期间控制线程不持锁，界面照样能刷新、能悔棋、能换人；
-//     若思考期间来了新命令，本次 AI 结果作废（用请求代数 reqGen_ 检测）。
+//   * AI 思考：在控制线程上同步调用 tick()，但调用前先解锁并推送一帧
+//     "正在思考"，所以界面不会冻住。思考期间新命令可以入队但不能立即执行，
+//     要等这一步算完；算完后若发现代数变了（reqGen_），本次结果作废。
+//     因此插件必须尊重 ThinkBudget——单步算太久，用户就会觉得"点不动"。
 //   * 观察者回调：在锁外调用，界面插件怎么慢都不会互相拖死。
 // ============================================================
 #pragma once
@@ -97,7 +98,6 @@ private:
     // ================= 控制线程 =================
     void controlLoop();
     bool hasWorkLocked() const;
-    bool handleAiTurn();                       // 返回 true 表示还要继续循环
 
     // ---- 待处理请求（由调用方线程写入，控制线程消费） ----
     struct Pending {
@@ -110,7 +110,7 @@ private:
         bool reqPlay = false;
         int  playR = -1, playC = -1;
 
-        int  reqUndo = 0;
+        long long reqUndo = 0;
 
         bool reqAbort = false;
 
@@ -137,7 +137,7 @@ private:
     // ---- 命令处理（均要求持有 stateMtx_） ----
     void doStartGameLocked(const Pending& req);
     void doPlayLocked(int r, int c);
-    void doUndoLocked(int steps);
+    void doUndoLocked(long long steps);
     void doAbortLocked();
     void doSwapLocked(Stone seat, const std::string& id);
     void doSaveLocked(const std::string& note);

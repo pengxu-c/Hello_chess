@@ -51,13 +51,13 @@ NewGameRequest parseNewGame(const nlohmann::json& body) {
     NewGameRequest req;
     if (!body.is_object()) return req;
 
-    req.rules.boardSize = body.value("boardSize", 15);
-    req.rules.winLength = body.value("winLength", 5);
+    req.rules.boardSize = jsonValueOr(body, "boardSize", 15);
+    req.rules.winLength = jsonValueOr(body, "winLength", 5);
     req.rules = req.rules.normalized();
 
-    req.black = body.value("black", std::string("human"));
-    req.white = body.value("white", std::string("human"));
-    req.storageEnabled = body.value("storageEnabled", true);
+    req.black = jsonValueOr(body, "black", std::string("human"));
+    req.white = jsonValueOr(body, "white", std::string("human"));
+    req.storageEnabled = jsonValueOr(body, "storageEnabled", true);
     return req;
 }
 

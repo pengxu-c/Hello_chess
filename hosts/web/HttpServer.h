@@ -56,6 +56,15 @@ private:
     std::mutex mtx_;
     std::condition_variable cv_;
     bool stopped_ = false;
+
+    // 【为什么自己记一个 WSAStartup 标志】
+    //   cpp-httplib 在头文件里定义了一个 static WSInit 去做 WSAStartup，但那份
+    //   初始化既不检查返回值、是否真的执行也依赖链接细节。本项目实测到了
+    //   WSAEPROVIDERFAILEDINIT(10106) —— socket() 在 Winsock 未初始化时就会报它。
+    //   既然出错时没人兜底，这里在 start() 里显式初始化一次并检查返回值。
+#ifdef _WIN32
+    bool wsaReady_ = false;
+#endif
 };
 
 }  // namespace gomoku

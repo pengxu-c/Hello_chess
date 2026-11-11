@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <string>
 #include <cstdint>
+#include <chrono>
 
 class Judge;
 class Stats;
@@ -92,10 +93,18 @@ public:
     bool isHuman() const override;
     bool needsDelay() const override;
     const char* name() const override;
+
+    // 单步思考上限（毫秒）。默认800ms；<=0 表示不限制（自对弈/离线跑谱）。
+    // 没有这道守卫时固定深度搜索在复杂局面会跑好几秒，界面像卡死。
+    void setTimeBudgetMs(int ms) { budgetMs_ = ms; }
 protected:
     Pos chooseMove(Board& board, ChessType color) override;
 private:
     Judge& judge_;
+    int budgetMs_ = 800;
+    bool timedOut_ = false;
+    uint64_t visitedNodes_ = 0;
+    std::chrono::steady_clock::time_point deadline_;
     static constexpr int kDepth = 4;      // 搜索深度（配合排序+哈希可加深）
     static constexpr int kRadius = 2;     // 候选着法半径（易调）
     static constexpr int kInf = 100000000;

@@ -31,8 +31,8 @@ public:
     bool unset(int r, int c) override;
 
     bool isFull() const override { return empty_ == 0; }
-    bool isEmpty() const override { return empty_ == size_ * size_; }
-    int  stoneCount() const override { return size_ * size_ - empty_; }
+    bool isEmpty() const override { return empty_ == static_cast<int>(cells_.size()); }
+    int  stoneCount() const override { return static_cast<int>(cells_.size()) - empty_; }
 
     std::vector<int> toCells() const override { return cells_; }
 

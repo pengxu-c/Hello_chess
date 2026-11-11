@@ -11,6 +11,9 @@
 #include "../contracts/IView.h"
 
 #include <algorithm>
+#include <climits>    // LLONG_MAX（undo饱和累加上界）
+#include <cstdio>     // std::fprintf（controlLoop异常兜底日志）
+#include <exception>  // std::exception
 
 namespace gomoku {
 
@@ -39,7 +42,30 @@ MatchSession::~MatchSession() {
 void MatchSession::start() {
     if (controlThread_.joinable()) return;
     finished_.store(false);
-    controlThread_ = std::thread([this] { controlLoop(); });
+    // 控制线程里controlLoop()全程没有try/catch：AI tick、界面render、
+    // 玩家onMatchStart/onMatchEnd、存储调用一旦抛异常就会从std::thread逃逸，
+    // 触发std::terminate；且异常时finished_不置位会让join()永久等待。
+    // 这里只在线程入口包一层兜底，不改controlLoop结构。
+    controlThread_ = std::thread([this] {
+        try {
+            controlLoop();
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[kernel] control loop aborted: %s\n", e.what());
+        } catch (...) {
+            std::fprintf(stderr, "[kernel] control loop aborted: unknown exception\n");
+        }
+        // 无论正常返回还是异常展开，都要让等待者能退出：controlLoop末尾
+        // 正常路径也会置这些标志，重复设置无害；异常时lk已在栈展开中解锁，
+        // 这里重新加锁是安全的。
+        {
+            std::lock_guard<std::mutex> g(stateMtx_);
+            quit_.store(true);
+            ++version_;
+        }
+        stateCv_.notify_all();
+        workCv_.notify_all();
+        finished_.store(true);
+    });
 }
 
 void MatchSession::join(int timeoutMs) {
@@ -195,6 +221,11 @@ void MatchSession::removeObserver(IView* view) {
     std::lock_guard<std::mutex> lk(stateMtx_);
     observers_.erase(std::remove(observers_.begin(), observers_.end(), view),
                      observers_.end());
+    // 清在途帧（UAF窗口A）：publishLocked把observers_裸指针拷进
+    // pendingFrame_.targets，dispatchNotifications在锁外render。只erase
+    // observers_会让已排队的帧仍持有即将析构的view。窗口B由宿主收尾顺序兜住。
+    auto& t = pendingFrame_.targets;
+    t.erase(std::remove(t.begin(), t.end(), view), t.end());
 }
 
 // ============================================================
@@ -239,7 +270,12 @@ bool MatchSession::undo(int steps) {
     {
         std::lock_guard<std::mutex> lk(stateMtx_);
         if (quit_.load() || status_ == status::kIdle) return false;
-        pending_.reqUndo += (steps <= 0 ? 1 : steps);
+        // steps来自HTTP JSON的任意int，连发大值会让原来的int reqUndo
+        // 有符号溢出变负，导致Pending::any()的reqUndo>0为假、命令永久不被消费。
+        // 改成long long并做饱和累加，值恒为正。
+        const long long add = (steps <= 0) ? 1LL : static_cast<long long>(steps);
+        if (pending_.reqUndo > LLONG_MAX - add) pending_.reqUndo = LLONG_MAX;
+        else pending_.reqUndo += add;
         ++reqGen_;
     }
     workCv_.notify_all();
@@ -539,6 +575,9 @@ void MatchSession::doStartGameLocked(const Pending& req) {
     humanAwaiting_ = false;
 
     if (store_ && store_->enabled()) {
+        // 旧局仍在进行时先收尾：StorageManager::startGame会直接覆盖current_，
+        // 不先finish会静默丢掉进行中的棋谱（对照doAbortLocked与终局处理）。
+        if (store_->inGame()) store_->finish(status::kIdle);
         store_->beginGame(rules, blackSeat_, whiteSeat_);
     }
 
@@ -580,7 +619,7 @@ void MatchSession::doPlayLocked(int r, int c) {
     publishLocked();
 }
 
-void MatchSession::doUndoLocked(int steps) {
+void MatchSession::doUndoLocked(long long steps) {
     if (status_ == status::kIdle) {
         setMessageLocked("No game in progress");
         publishLocked();
@@ -598,7 +637,11 @@ void MatchSession::doUndoLocked(int steps) {
     }
 
     const int before = store_->moveCount();
-    store_->undo(steps, board_);
+    // 存储层undo收int，饱和后的long long可能超过int范围，夹到INT_MAX再交出去；
+    // 存储实现内部还会再夹到实际步数，语义不变。
+    const int undoSteps = (steps > static_cast<long long>(INT_MAX))
+                              ? INT_MAX : static_cast<int>(steps);
+    store_->undo(undoSteps, board_);
     const int undone = before - store_->moveCount();
     if (undone <= 0) {
         setMessageLocked("Nothing to undo");
@@ -689,12 +732,27 @@ void MatchSession::doLoadLocked(const std::string& id) {
         return;
     }
 
+    // 整体校验在place/record之前：归一化后的boardSize才是内核与存储真正
+    // 使用的边界（match_.reset也会用同一份）。发现越界坐标或非法颜色就整体
+    // 拒绝，避免把非法记录写回存档，也避免place失败仍record。
+    const int boardSize = rules.normalized().boardSize;
+    for (const auto& m : moves) {
+        const bool colorOk = (m.color == Stone::Black || m.color == Stone::White);
+        if (m.r < 0 || m.r >= boardSize || m.c < 0 || m.c >= boardSize || !colorOk) {
+            setMessageLocked("Load failed: invalid move record");
+            publishLocked();
+            return;
+        }
+    }
+
     releasePlayersLocked();
     match_.reset(rules);
     setSeatsLocked(blackId.empty() ? "human" : blackId,
                    whiteId.empty() ? "human" : whiteId);
 
-    // 用记录重建棋盘，并把记录重新写入存储（保证存储与棋盘一致）
+    // 用记录重建棋盘，并把记录重新写入存储（保证存储与棋盘一致）。
+    // 旧局仍在进行时先收尾，避免beginGame直接覆盖current_静默丢弃棋谱。
+    if (store_->inGame()) store_->finish(status::kIdle);
     store_->beginGame(match_.rules(), blackSeat_, whiteSeat_);
     for (const auto& m : moves) {
         board_.place(m.r, m.c, m.color);
@@ -702,7 +760,10 @@ void MatchSession::doLoadLocked(const std::string& id) {
     }
     match_.rebuild(moves);
 
-    status_ = status::kInProgress;
+    // rebuild之后用状态机推导终局：载入已五连的残局时over_为true，
+    // 必须置对应胜负状态，否则status仍是InProgress，AI会无限tick→
+    // applyMove失败→活锁刷帧。statusFromMatch内部已按over()/winner()判定。
+    status_ = statusFromMatch(match_);
     thinking_ = false;
     setMessageLocked("Resume loaded (" + std::to_string(moves.size()) + " moves)");
     publishLocked();

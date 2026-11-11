@@ -76,7 +76,6 @@ namespace {
 
 // ---- 尺寸上限：仅用于静态数组维度，实际一律取自 Board ----
 constexpr int kMaxBoardSize = 30;                                  // 棋盘边长上限
-constexpr int kMaxCells     = kMaxBoardSize * kMaxBoardSize;
 constexpr int kMaxWinLen    = 15;                                  // 连珠数上限
 
 constexpr int kDR[4] = { 0, 1, 1, 1 };
@@ -383,7 +382,24 @@ struct TacticalMax::Impl {
     void buildIndex(const Board& b) {
         n = b.size();
         w = b.winLen();
-        cellTotal = n * n;
+        // L2 纵深防御：在任何 assign 或 1<<(w+2) 指数移位之前先夹取尺寸，
+        // 兜住绕过 RulesConfig::normalized() 直达引擎的入口（restoreResume
+        // 存档值、bench 自测接口 makeBoard）。越界时清空窗口并建立一套
+        // 自洽的空状态，由 decide 的 wins.empty() 兜底给出合法候选点。
+        if (n <= 0 || n > kMaxBoardSize || w <= 0 || w > kMaxWinLen || w > n) {
+            cellTotal = (n > 0 && n <= kMaxBoardSize) ? n * n : 0;
+            wins.clear();
+            refs.assign(static_cast<size_t>(cellTotal), {});
+            zob.assign(static_cast<size_t>(cellTotal) * 2, 0);
+            valCache.assign(1, -1);
+            tt.assign(1u << kTTBits, TTEntry{});
+            activeCnt.assign(static_cast<size_t>(cellTotal), 0);
+            keyFive[0].reset(cellTotal); keyFive[1].reset(cellTotal);
+            keyFour[0].reset(cellTotal); keyFour[1].reset(cellTotal);
+            history.assign(static_cast<size_t>(cellTotal), 0);
+            return;   // 走 decide 的 wins.empty() 兜底候选
+        }
+        cellTotal = n * n;   // 此时 n<=30，无溢出
 
         wins.clear();
         refs.assign(static_cast<size_t>(cellTotal), {});
@@ -402,8 +418,6 @@ struct TacticalMax::Impl {
         keyFour[0].reset(cellTotal);
         keyFour[1].reset(cellTotal);
         history.assign(static_cast<size_t>(cellTotal), 0);
-
-        if (n <= 0 || w <= 0 || w > n) return;      // 退化尺寸：不建窗口，走兜底候选
 
         // 枚举全部长度 w 的定长窗口：4 个方向 × 每个可能起点
         for (int d = 0; d < kDirCount; ++d) {

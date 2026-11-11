@@ -320,8 +320,7 @@ int MinimaxPP::evaluate(const Board& board, ChessType aiColor) const {
 }
 
 // 生成候选着法：棋盘空时返回中心；否则收集已有棋子周围 kRadius 内的空位。
-// 用静态布尔数组去重，避免递归中堆分配（性能关键）。
-// static 缓冲安全：generateMoves 不递归，返回 vector 后缓冲可被内层重用。
+// 用局部布尔表去重：尺寸取自 Board（n<=30），避免静态数组被越界写穿。
 std::vector<Pos> MinimaxPP::generateMoves(const Board& board) const {
     std::vector<Pos> moves;
     int n = board.size();
@@ -330,10 +329,10 @@ std::vector<Pos> MinimaxPP::generateMoves(const Board& board) const {
         for (int c = 0; c < n; c++)
             if (board.at(r, c) != ChessType::None) { hasAny = true; break; }
     if (!hasAny) { moves.push_back({ n / 2, n / 2 }); return moves; }
-    static bool nearby[kMaxBoard][kMaxBoard];          // 静态缓冲，避免每次递归堆分配
+    std::vector<bool> nearby(static_cast<size_t>(n) * n, false);
     for (int r = 0; r < n; r++)
         for (int c = 0; c < n; c++)
-            nearby[r][c] = false;
+            nearby[static_cast<size_t>(r) * n + c] = false;
     for (int r = 0; r < n; r++) {
         for (int c = 0; c < n; c++) {
             if (board.at(r, c) == ChessType::None) continue;
@@ -341,14 +340,14 @@ std::vector<Pos> MinimaxPP::generateMoves(const Board& board) const {
                 for (int dc = -kRadius; dc <= kRadius; dc++) {
                     int nr = r + dr, nc = c + dc;
                     if (board.inBounds(nr, nc) && board.at(nr, nc) == ChessType::None)
-                        nearby[nr][nc] = true;
+                        nearby[static_cast<size_t>(nr) * n + nc] = true;
                 }
             }
         }
     }
     for (int r = 0; r < n; r++)
         for (int c = 0; c < n; c++)
-            if (nearby[r][c]) moves.push_back({ r, c });
+            if (nearby[static_cast<size_t>(r) * n + c]) moves.push_back({ r, c });
     return moves;
 }
 
@@ -367,6 +366,7 @@ uint64_t MinimaxPP::boardHash(const Board& board) const {
     int n = board.size();
     for (int r = 0; r < n; r++)
         for (int c = 0; c < n; c++) {
+            if (r >= kMaxBoard || c >= kMaxBoard) continue;   // 纵深防御：zobrist_ 仅 kMaxBoard×kMaxBoard
             ChessType t = board.at(r, c);
             if (t == ChessType::Black)      h ^= zobrist_[r][c][0];
             else if (t == ChessType::White) h ^= zobrist_[r][c][1];
@@ -381,6 +381,15 @@ uint64_t MinimaxPP::boardHash(const Board& board) const {
 // hash 为当前局面 Zobrist 哈希，落子时异或更新，O(1) 维护。
 int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
                        ChessType curColor, bool isMax, ChessType aiColor, uint64_t hash) {
+    // 时间守卫：每 1024 个节点查一次时钟（避免在热路径里反复取时间）。
+    // 超时后本次搜索立即收敛为静态评估，且不许把不完整结果写进置换表，
+    // 否则下一层/下一手会拿到被污染的分数。
+    if ((++visitedNodes_ & 1023u) == 0 && budgetMs_ > 0 &&
+        std::chrono::steady_clock::now() >= deadline_) {
+        timedOut_ = true;
+    }
+    if (timedOut_) return evaluate(board, aiColor);
+
     // 置换表查询
     auto it = transTable_.find(hash);
     if (it != transTable_.end() && it->second.depth >= depth) {
@@ -413,7 +422,8 @@ int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
     bool terminal = false;
     for (const auto& m : sortedMoves) {
         int colorIdx = (curColor == ChessType::Black) ? 0 : 1;
-        uint64_t newHash = hash ^ zobrist_[m.r][m.c][colorIdx];
+        uint64_t newHash = (m.r < kMaxBoard && m.c < kMaxBoard)
+            ? (hash ^ zobrist_[m.r][m.c][colorIdx]) : hash;
         board.set(m.r, m.c, curColor);
         // checkWin 不再传 length 参数，Judge 内部用 board.winLen()
         if (judge_.checkWin(board, {m.r, m.c}, curColor)) {
@@ -431,8 +441,11 @@ int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
         if (sign * best > sign * bound) bound = best;
         if (alpha >= beta) break;                 // α-β 剪枝
     }
-    int flag = terminal ? 0 : (best <= origAlpha ? 2 : (best >= origBeta ? 1 : 0));
-    transTable_[hash] = {depth, best, flag};
+    // 超时路径的 best 是半截搜索结果，绝不能进置换表。
+    if (!timedOut_) {
+        int flag = terminal ? 0 : (best <= origAlpha ? 2 : (best >= origBeta ? 1 : 0));
+        transTable_[hash] = {depth, best, flag};
+    }
     return best;
 }
 
@@ -443,6 +456,14 @@ int MinimaxPP::minimax(Board& board, int depth, int alpha, int beta,
 //   修复旧版"互斥选择"导致同时存在多威胁时只防其一、被另一个连杀的问题。
 Pos MinimaxPP::chooseMove(Board& board, ChessType color) {
     ChessType opp = opponent(color);
+
+    // 每一步重置时间预算。预算<=0 表示不限制（自对弈/离线跑谱）。
+    timedOut_ = false;
+    visitedNodes_ = 0;
+    if (budgetMs_ > 0) {
+        deadline_ = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(budgetMs_);
+    }
 
     if (!zobristInited_) { initZobrist(); zobristInited_ = true; }
     transTable_.clear();                                    // 每次顶层决策重置置换表
@@ -477,12 +498,14 @@ Pos MinimaxPP::chooseMove(Board& board, ChessType color) {
     std::vector<ScoredMove> scored;
     scored.reserve(cands.size());
     for (const auto& m : cands) {
-        uint64_t newHash = baseHash ^ zobrist_[m.r][m.c][colorIdxMe];
+        uint64_t newHash = (m.r < kMaxBoard && m.c < kMaxBoard)
+            ? (baseHash ^ zobrist_[m.r][m.c][colorIdxMe]) : baseHash;
         board.set(m.r, m.c, color);
         int val = minimax(board, kDepth - 1, -kInf, kInf, opp, false, color, newHash);
         board.set(m.r, m.c, ChessType::None);
         int s = val + (pointScore(board, m.r, m.c, color, 1000000) + pointScore(board, m.r, m.c, opp, 1000000)) / 1000;
         scored.push_back({s, m.r, m.c});
+        if (timedOut_) break;   // 预算用尽：用已算完的候选挑最好的，不再展开新分支
     }
     if (!defenseMoves.empty()) return pickBestNoRandom(scored);
     return pickBestMove(scored);

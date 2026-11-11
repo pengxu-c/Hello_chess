@@ -14,6 +14,43 @@
 #include <io.h>
 #include <cstdio>
 
+namespace {
+
+// 容错解析：stoi/stoll 遇到非法串或超范围会抛异常，构造函数里的
+// loadGlobalStats 直接调用，坏 stats.txt 会让进程启动即崩。要求整串
+// 被消费（used==v.size()），任何异常或残留都回退到 fallback。
+int parseIntSafe(const std::string& v, int fallback) {
+    try {
+        size_t used = 0;
+        int result = std::stoi(v, &used);
+        if (used != v.size()) return fallback;
+        return result;
+    } catch (...) {
+        return fallback;
+    }
+}
+
+long long parseLongLongSafe(const std::string& v, long long fallback) {
+    try {
+        size_t used = 0;
+        long long result = std::stoll(v, &used);
+        if (used != v.size()) return fallback;
+        return result;
+    } catch (...) {
+        return fallback;
+    }
+}
+
+// 压平换行/回车/制表符：note 原样写盘可伪造后续 key=value 字段
+std::string singleLine(const std::string& s) {
+    std::string out = s;
+    for (char& ch : out)
+        if (ch == '\r' || ch == '\n' || ch == '\t') ch = ' ';
+    return out;
+}
+
+}  // namespace
+
 StorageManager::StorageManager() {
     loadGlobalStats();
 }
@@ -29,7 +66,15 @@ StorageManager::~StorageManager() {
 // ====== 配置 ======
 void StorageManager::setEnabled(bool enabled) { config_.enabled = enabled; }
 bool StorageManager::isEnabled() const { return config_.enabled; }
-void StorageManager::setConfig(const StorageConfig& cfg) { config_ = cfg; }
+void StorageManager::setConfig(const StorageConfig& cfg) {
+    // L2：切换数据目录后重载统计，避免统计初值来自旧的默认 "data" 目录
+    const std::string oldDir = config_.dataDir;
+    config_ = cfg;
+    if (config_.dataDir != oldDir) {
+        globalStats_ = GlobalStats{};
+        loadGlobalStats();
+    }
+}
 const StorageConfig& StorageManager::config() const { return config_; }
 
 // ====== 棋局生命周期 ======
@@ -186,8 +231,12 @@ bool StorageManager::restoreResume(const std::string& id, Board& board,
     GameRecord record;
     if (!loadResume(id, record)) return false;
 
+    // L2 纵深防御：存档值不可信，先夹取再写入 Board，阻断绕过归一化的入口
     boardSize = record.boardSize;
+    if (boardSize < 4 || boardSize > 30) boardSize = 15;
     winLength = record.winLength;
+    if (winLength < 4 || winLength > 15) winLength = 5;
+    if (winLength > boardSize) winLength = boardSize;
     p1Type = record.player1Type;
     p2Type = record.player2Type;
     // 设置棋盘尺寸与连珠数到 Board 成员（不再写全局可变变量）
@@ -418,6 +467,12 @@ std::string StorageManager::dirPath(const std::string& subdir) const {
 }
 
 std::string StorageManager::filePath(const std::string& subdir, const std::string& filename) const {
+    // L2：堵住 HTTP 存档 id 的路径穿越。空名或含 .. / \ / 一律返回空串，
+    // 让 ifstream/ofstream 自然失败；stats.txt 不含这些字符，不受影响。
+    if (filename.empty() || filename.find("..") != std::string::npos ||
+        filename.find('\\') != std::string::npos ||
+        filename.find('/') != std::string::npos)
+        return std::string();
     return dirPath(subdir) + "\\" + filename;
 }
 
@@ -459,7 +514,7 @@ bool StorageManager::saveRecord(const GameRecord& record, const std::string& sub
     ofs << "endTime=" << record.endTime << "\n";
     ofs << "blackMoves=" << record.blackMoves << "\n";
     ofs << "whiteMoves=" << record.whiteMoves << "\n";
-    ofs << "note=" << record.note << "\n";
+    ofs << "note=" << singleLine(record.note) << "\n";
     ofs << "moveCount=" << record.moves.size() << "\n";
     ofs << "[MOVES]\n";
     for (const auto& mv : record.moves) {
@@ -467,7 +522,8 @@ bool StorageManager::saveRecord(const GameRecord& record, const std::string& sub
             << static_cast<int>(mv.color) << "," << mv.timestamp << "\n";
     }
     ofs << "[/MOVES]\n";
-    return true;
+    ofs.flush();
+    return static_cast<bool>(ofs);
 }
 
 bool StorageManager::loadRecord(const std::string& filepath, GameRecord& record) const {
@@ -488,10 +544,14 @@ bool StorageManager::loadRecord(const std::string& filepath, GameRecord& record)
             std::istringstream iss(line);
             MoveRecord mv;
             char sep;
-            int colorInt;
-            iss >> mv.step >> sep >> mv.r >> sep >> mv.c >> sep >> colorInt >> sep >> mv.timestamp;
-            mv.color = static_cast<ChessType>(colorInt);
-            record.moves.push_back(mv);
+            int colorInt = 0;
+            // 整行解析成功且颜色合法才入列，坏行绝不 push 垃圾记录
+            if (iss >> mv.step >> sep >> mv.r >> sep >> mv.c >> sep >> colorInt >> sep >> mv.timestamp) {
+                if (colorInt == -1 || colorInt == 0 || colorInt == 1) {
+                    mv.color = static_cast<ChessType>(colorInt);
+                    record.moves.push_back(mv);
+                }
+            }
             continue;
         }
 
@@ -501,17 +561,17 @@ bool StorageManager::loadRecord(const std::string& filepath, GameRecord& record)
         std::string val = line.substr(pos + 1);
 
         if (key == "id")            record.id = val;
-        else if (key == "boardSize")   record.boardSize = std::stoi(val);
-        else if (key == "winLength")   record.winLength = std::stoi(val);
+        else if (key == "boardSize")   record.boardSize = parseIntSafe(val, record.boardSize);
+        else if (key == "winLength")   record.winLength = parseIntSafe(val, record.winLength);
         else if (key == "player1")     record.player1Name = val;
         else if (key == "player2")     record.player2Name = val;
-        else if (key == "player1Type") record.player1Type = std::stoi(val);
-        else if (key == "player2Type") record.player2Type = std::stoi(val);
+        else if (key == "player1Type") record.player1Type = parseIntSafe(val, record.player1Type);
+        else if (key == "player2Type") record.player2Type = parseIntSafe(val, record.player2Type);
         else if (key == "status")      record.status = stringToStatus(val);
-        else if (key == "startTime")   record.startTime = std::stoll(val);
-        else if (key == "endTime")     record.endTime = std::stoll(val);
-        else if (key == "blackMoves")  record.blackMoves = std::stoi(val);
-        else if (key == "whiteMoves")  record.whiteMoves = std::stoi(val);
+        else if (key == "startTime")   record.startTime = parseLongLongSafe(val, record.startTime);
+        else if (key == "endTime")     record.endTime = parseLongLongSafe(val, record.endTime);
+        else if (key == "blackMoves")  record.blackMoves = parseIntSafe(val, record.blackMoves);
+        else if (key == "whiteMoves")  record.whiteMoves = parseIntSafe(val, record.whiteMoves);
         else if (key == "note")        record.note = val;
     }
     return true;
@@ -530,14 +590,14 @@ void StorageManager::loadGlobalStats() {
         std::string key = line.substr(0, pos);
         std::string val = line.substr(pos + 1);
 
-        if (key == "totalGames")       globalStats_.totalGames = std::stoi(val);
-        else if (key == "blackWins")      globalStats_.blackWins = std::stoi(val);
-        else if (key == "whiteWins")      globalStats_.whiteWins = std::stoi(val);
-        else if (key == "draws")          globalStats_.draws = std::stoi(val);
-        else if (key == "aborts")         globalStats_.aborts = std::stoi(val);
-        else if (key == "blackTotalMoves") globalStats_.blackTotalMoves = std::stoi(val);
-        else if (key == "whiteTotalMoves") globalStats_.whiteTotalMoves = std::stoi(val);
-        else if (key == "lastUpdate")     globalStats_.lastUpdate = std::stoll(val);
+        if (key == "totalGames")       globalStats_.totalGames = parseIntSafe(val, globalStats_.totalGames);
+        else if (key == "blackWins")      globalStats_.blackWins = parseIntSafe(val, globalStats_.blackWins);
+        else if (key == "whiteWins")      globalStats_.whiteWins = parseIntSafe(val, globalStats_.whiteWins);
+        else if (key == "draws")          globalStats_.draws = parseIntSafe(val, globalStats_.draws);
+        else if (key == "aborts")         globalStats_.aborts = parseIntSafe(val, globalStats_.aborts);
+        else if (key == "blackTotalMoves") globalStats_.blackTotalMoves = parseIntSafe(val, globalStats_.blackTotalMoves);
+        else if (key == "whiteTotalMoves") globalStats_.whiteTotalMoves = parseIntSafe(val, globalStats_.whiteTotalMoves);
+        else if (key == "lastUpdate")     globalStats_.lastUpdate = parseLongLongSafe(val, globalStats_.lastUpdate);
     }
 }
 

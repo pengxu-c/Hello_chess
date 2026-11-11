@@ -18,6 +18,18 @@
 
 namespace gomoku {
 
+// ---- 从不可信 JSON 里取字段的唯一实现 ----
+// nlohmann::json::value<T>() 在字段类型不匹配时会抛 type_error；命令分发
+// 跑在界面线程上，异常穿透线程入口就是 std::terminate。所有 HTTP 入参
+// （新局参数、命令字段、回放参数）都改走这里，缺字段/类型不对都回退默认值。
+template <typename T>
+T jsonValueOr(const nlohmann::json& j, const char* key, T fallback) {
+    if (!j.is_object()) return fallback;
+    auto it = j.find(key);
+    if (it == j.end() || it->is_null()) return fallback;
+    try { return it->get<T>(); } catch (...) { return fallback; }
+}
+
 // ---- 状态快照 → JSON（前端渲染用） ----
 nlohmann::json toJson(const ViewState& s);
 

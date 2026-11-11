@@ -78,7 +78,20 @@ std::string executableDir() {
             std::wstring ws(buf.data(), n);
             const size_t pos = ws.find_last_of(L"\\/");
             if (pos == std::wstring::npos) return ".";
-            return std::string(ws.begin(), ws.begin() + static_cast<long>(pos));
+            // 【必须按编码整体转换，不能逐字节截断】
+            //   GetModuleFileNameW 给的是 UTF-16 宽字符；直接拿 wchar_t 迭代器
+            //   构造 std::string 会把每个宽字符截成低字节，中文/非 ASCII 目录
+            //   立刻变乱码，导致 webapp/、源码根、config.json 三个定位策略全落空
+            //   （API 玩家也跟着永远是灰的）。MSVC 会报 C4244 警告。
+            const std::wstring dir = ws.substr(0, pos);
+            const int need = WideCharToMultiByte(CP_UTF8, 0, dir.c_str(),
+                                                 static_cast<int>(dir.size()),
+                                                 nullptr, 0, nullptr, nullptr);
+            if (need <= 0) return ".";
+            std::string out(static_cast<size_t>(need), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, dir.c_str(), static_cast<int>(dir.size()),
+                                &out[0], need, nullptr, nullptr);
+            return out;
         }
         buf.resize(buf.size() * 2);   // 路径超长，重试
     }

@@ -55,7 +55,7 @@ private:
     HttpReply handleRequest(const std::string& method, const std::string& path,
                             const std::string& body);
     void dispatchCommand(const std::string& json);   // 控制线程：JSON 命令 → 内核调用
-    void pushCommand(const std::string& json);       // HTTP 线程：入队
+    bool pushCommand(const std::string& json);       // HTTP 线程：入队，满则 false
 
     std::string webRoot_;
     int port_ = 0;
@@ -72,6 +72,8 @@ private:
     std::condition_variable frameCv_;
 
     // 待执行命令（HTTP 线程写、poll 执行）
+    // 队列上限：内核处理不过来时防止 HTTP 线程无界堆积命令把内存吃光。
+    static constexpr int kMaxPendingCommands = 256;
     mutable std::mutex cmdMtx_;
     std::condition_variable cmdCv_;
     std::deque<std::string> commands_;

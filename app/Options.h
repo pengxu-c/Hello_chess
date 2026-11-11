@@ -12,10 +12,12 @@
 namespace gomoku {
 
 struct Options {
-    // 默认界面：easyx（原生图形窗口）。
-    // 想用其它界面：--view cli（终端）/ --view web（浏览器）。
-    // 想改默认值就改这一行。
-    std::string view = "easyx";         // 使用哪个界面插件（见 --views 列表）
+    // 默认界面：浏览器。它不依赖任何额外图形库，双击即开，交互最完整。
+    // 旧版曾以 EasyX 原生窗口为默认，但 VS 升级到 18 2026 后集成的
+    // easyx.h 随旧实例一起消失；装好 EasyX 后仍可 --view easyx 显式启用。
+    // 想用别的界面：--view cli（终端）/ --view easyx（原生窗口）。
+    std::string view = "web";           // 使用哪个界面插件（见 --views 列表）
+    bool viewExplicit = false;         // 用户是否显式写了 --view（决定能否自动降级）
     std::string black = "human";       // 黑方玩家插件 id
     std::string white = "minimax";     // 白方玩家插件 id
     RulesConfig rules;
@@ -24,14 +26,14 @@ struct Options {
     bool openBrowser = true;
     bool storage = true;               // 是否启用记忆存储
     std::string dataDir = "data";
-    int  thinkMs = 1500;               // AI 思考预算
+    int  thinkMs = 800;                // AI 思考预算（默认800ms，保证点击后很快响应）
 
     bool listPlugins = false;          // --list 打印玩家/界面目录后退出
     bool selfplay = false;             // --selfplay N：无头自对弈
     bool selfTest = false;             // --selftest：进程内端到端自检
     int  holdSeconds = 0;              // --hold N：自检后继续托管网页界面 N 秒（人工验收用）
     int  games = 1;
-    bool autoStart = false;            // 启动后立即开局（默认等待用户点 New Game）
+    bool autoStart = true;             // 启动即开局；--no-start 可回到"打开后手动点新局"
     bool quiet = false;                // 少打印
 
     // --cli / --headless 等便捷开关的原始意图

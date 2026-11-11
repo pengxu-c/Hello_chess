@@ -22,7 +22,6 @@ public:
 
     std::string id() const override { return "random"; }
     std::string displayName() const override { return "Random"; }
-    bool async() const override { return false; }   // 极快，不需要线程
 
     Decision tick(const ViewState& state, const ThinkBudget& budget) override;
 
@@ -36,7 +35,6 @@ class GreedyPlayer final : public IPlayer {
 public:
     std::string id() const override { return "greedy"; }
     std::string displayName() const override { return "Greedy"; }
-    bool async() const override { return false; }
 
     Decision tick(const ViewState& state, const ThinkBudget& budget) override;
 
